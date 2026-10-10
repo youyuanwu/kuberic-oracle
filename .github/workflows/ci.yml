@@ -16,25 +16,7 @@ concurrency:
 
 jobs:
   validation:
-    name: Server-free validation
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v2
-        with:
-          components: rustfmt, clippy
-          build-warnings: ""
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Run strict Clippy
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-      - name: Run tests
-        run: cargo test --locked --workspace --all-features
-
-  oracle-live:
-    name: Oracle Free live PoC
-    needs: validation
+    name: Validation
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -48,7 +30,11 @@ jobs:
         with:
           components: rustfmt, clippy
           build-warnings: ""
-      - name: Check live-test prerequisites
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run strict Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Check Oracle live-test prerequisites
         run: |
           test "$(uname -m)" = "x86_64"
           docker info
@@ -57,11 +43,8 @@ jobs:
             sudo apt-get install --yes strace
           fi
           df -h /
-      - name: Run authorized Oracle Free live proof
-        run: >-
-          cargo test --locked -p kuberic-oracle-tests
-          --test live_observer --
-          --ignored --exact observes_owned_oracle_free_member --nocapture
+      - name: Run tests
+        run: cargo test --locked --workspace --all-features
       - name: Recover interrupted fixture
         if: always()
         run: |

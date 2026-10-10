@@ -129,8 +129,10 @@ If a test process is interrupted after the ownership journal is written, use
 the same environment and run `just live-cleanup`. Cleanup loads the retained
 journal, revalidates immutable identities, and refuses foreign replacements.
 
-GitHub Actions runs the authorized live proof by default after server-free
-validation on every pull request and push to `main`.
+GitHub Actions enables the authorization-gated Rust test in its default
+validation job on every pull request and push to `main`. Local `cargo test` and
+`just check` leave the live body disabled unless
+`KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES` is set.
 
 The live proof requires Linux x86-64, Docker, `strace`, sufficient image
 storage, the pinned Linux image digest, and one local `FREEPDB1` observer. It

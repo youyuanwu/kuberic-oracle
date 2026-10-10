@@ -15,8 +15,13 @@ use kuberic_oracle_tests::{
 const IMAGE: &str = "container-registry.oracle.com/database/free@sha256:c4d9b15a1b2240ce90730c23ce298fcdd34f6793792c1b3849181a080009c322";
 
 #[test]
-#[ignore = "requires explicit Oracle terms authorization and Docker"]
 fn observes_owned_oracle_free_member() {
+    if std::env::var("KUBERIC_ORACLE_ACCEPT_FREE_TERMS").as_deref() != Ok("YES") {
+        eprintln!(
+            "Oracle live proof skipped: set KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES to authorize it"
+        );
+        return;
+    }
     let worker = Path::new(env!("CARGO_BIN_EXE_oracle-poc-worker"));
     let worker_metadata = worker.metadata().unwrap();
     assert!(worker_metadata.is_file());
