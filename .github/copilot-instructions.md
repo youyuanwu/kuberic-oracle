@@ -8,6 +8,8 @@ in an externally provisioned, digest-pinned container. Do not add database
 deployment, Data Guard mutation, promotion, switchover, or license-acceptance
 behavior to production code without an explicit design and safety review.
 
-Run `just check` for routine changes. Live Oracle container tests, when added,
-must remain ignored by default and must clean up only resources recorded in an
-exact ownership journal.
+Run `just check` for routine changes. The live Oracle PoC remains ignored by
+default, requires explicit terms authorization, is Linux x86-64/test-only, and
+may use plaintext only through its owned loopback fixture. Production must not
+expose plaintext. Live cleanup may remove only resources recorded and
+revalidated through the exact ownership journal.

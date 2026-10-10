@@ -126,16 +126,22 @@ The production crate implements:
   checks;
 - fail-closed parsing of supported role, open-mode, logging, Boolean, numeric,
   product-version, and identity values;
-- retained product/version evidence;
+- independently observed native edition and native major version;
+- retained Oracle AI Database product, version, and release evidence;
 - observation freshness and future-time rejection;
 - target DBID and `DB_UNIQUE_NAME` validation;
 - edition and major-version validation;
 - standalone-primary admission; and
 - preliminary physical-primary/standby admission requiring `ARCHIVELOG` and
-  `FORCE LOGGING`.
+  `FORCE LOGGING`; and
+- an opt-in test-only live PoC using Oracle's pure-Rust `oracledb`
+  `26.0.0-beta.4`, one disposable worker process, and one owned Oracle Free
+  container.
 
 The implementation does not yet claim that admitted Data Guard evidence is
 sufficient for promotion, Kuberic progress publication, or write authority.
+Production code remains server-free; the PoC's plaintext connection and Docker
+authority exist only in the tests crate.
 
 ## Provisioning boundary
 
@@ -166,7 +172,7 @@ Production code must not:
 
 ### Test fixture
 
-The first fixture will own one Oracle Free container. A later Enterprise
+The opt-in PoC fixture owns one Oracle Free container. A later Enterprise
 Developer fixture may own three containers only after license handling and Data
 Guard design are reviewed.
 
@@ -201,7 +207,7 @@ reported together.
 Every attempt will use fixed, read-only queries. Arbitrary SQL is not accepted
 from JSON, environment variables, or command-line arguments.
 
-The future live snapshot will read at least:
+The fixed snapshot reads:
 
 - `V$DATABASE` for DBID, database name, unique name, role, open mode, current
   SCN, resetlogs SCN, activation number, log mode, force logging, and CDB state;
@@ -209,12 +215,12 @@ The future live snapshot will read at least:
   and database status; and
 - `PRODUCT_COMPONENT_VERSION` for product and version cross-checking.
 
-The server-free parser consumes caller-provided raw rows corresponding to the
-fixed queries and retains parsed product/version evidence. It does not execute
-Oracle queries, so Oracle-derived provenance remains unproven until a live
-observer supplies those rows. Edition remains provisional configured input
-until a documented live edition source is independently derived and both
-sources are cross-checked against the configured image and support profile.
+The production parser consumes raw rows corresponding to the fixed queries and
+retains parsed product/version evidence. The test-only PoC executes those
+queries against the pinned Oracle Free image and independently reads
+`V$INSTANCE.EDITION`. It verifies native version `23.26.3.0.0` separately from
+the Oracle AI Database 26ai marketing name. Production still has no live
+connection path.
 
 A mounted physical standby may return `NULL` for `CURRENT_SCN` because the
 database is not open. The snapshot and admission contracts preserve that
@@ -381,29 +387,47 @@ Implemented server-free foundations:
 - fail-closed logging and native-value parsing; and
 - server-free configuration, parsing, identity-change, and admission tests.
 
-Remaining live-observer work:
+Implemented test-only PoC:
 
-- choose and pin an Oracle Rust driver and Instant Client strategy;
-- read credential and trust files with bounded secure handling;
-- implement TLS-verified connection establishment;
-- execute the fixed query bracket and enforce configured row counts;
-- document and test the selected driver's timeout, cancellation, and
-  interrupted-session reuse behavior, discarding interrupted sessions unless
-  safe reuse is demonstrated;
-- add sanitized CLI output and watch mode; and
-- add live cancellation/session-state, TLS, privilege, and row-scope tests.
+- exact pure-Rust beta pin with no Instant Client/native Oracle dependency;
+- bounded credential reads and process-bounded driver copies;
+- versioned parent/worker IPC, stage deadlines, caller cancellation, complete
+  process-group termination/reaping, and sanitized failures;
+- loopback-only plaintext fixture connection, verified with captured
+  `connect(2)` destinations;
+- exact row-count enforcement and fixed-query parsing/admission;
+- independent live edition, native version, and product/release evidence; and
+- positive, wrong-password, removed-grant, privilege-audit, and cleanup proof.
+
+Remaining production live-observer work:
+
+- select a production-supported Oracle client strategy;
+- implement separately reviewed TLS-verified connection establishment;
+- read production credentials and trust material;
+- add a production observer API and sanitized operational output;
+- prove production timeout, cancellation, redirect, privilege, and transport
+  semantics; and
+- add watch mode only after the one-shot production observer is safe.
 
 ### Stage 2: owned Free container fixture
 
-- add explicit Oracle terms acknowledgement for tests;
-- implement exact Docker ownership journaling;
-- launch one digest-pinned Free container;
-- provision the observation principal;
-- validate startup-time restart evidence, explicit incarnation/resource
-  bindings, volume reuse, and the selected CDB/PDB row scope;
-- test authentication, authorization, TLS, timeout, signal, and cleanup paths;
-  and
-- keep live tests ignored by default unless CI explicitly opts in.
+Implemented for the local PoC:
+
+- explicit terms acknowledgement and exact Linux x86-64 digest;
+- atomic suite ownership and durable desired/observed Docker journal;
+- one network, volume, container, loopback port, and owner-only credential set;
+- local `FREEPDB1` observer with exact direct grants and prohibited-privilege
+  audit;
+- positive, authentication, authorization, process-signal, row-scope, and
+  cleanup cases; and
+- ignored-by-default live execution.
+
+Still deferred:
+
+- TCPS fixture provisioning and certificate lifecycle;
+- volume reuse/restart-incarnation testing;
+- production-equivalent transport claims; and
+- automated licensed CI execution.
 
 ### Stage 3: Kuberic observe-only runtime
 

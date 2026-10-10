@@ -7,7 +7,8 @@ safety boundary established by
 observes an already provisioned database, while test-only infrastructure may
 own isolated database containers.
 
-The current repository implements the first server-free foundation:
+The current repository implements the server-free contracts plus an opt-in
+test-only live proof:
 
 - digest-pinned image-reference syntax validation;
 - explicit standalone and Data Guard deployment profiles;
@@ -19,12 +20,13 @@ The current repository implements the first server-free foundation:
   including nullable `CURRENT_SCN` and exact supported logging values;
 - fail-closed observation admission for identity, freshness, edition, version,
   and the currently modeled role, logging, and open-mode subset; and
-- contract tests for Oracle Free and future Enterprise Data Guard profiles.
+- a pure-Rust, process-isolated Oracle Free live test with exact image,
+  least-privilege, row-count, failure, and cleanup checks.
 
-It does **not** yet select an Oracle driver, connect to Oracle, read credential
-files, launch containers, publish Kuberic progress, configure Data Guard, or
-perform role changes. The parser currently consumes caller-provided raw rows;
-no live observer executes the query inventory.
+Production code still does **not** connect to Oracle, read credentials, launch
+containers, publish Kuberic progress, configure Data Guard, or perform role
+changes. The live driver and plaintext connection exist only in the tests
+crate; plaintext is not a supported production mode.
 
 See the [support and safety design](docs/design.md) and
 [Kuberic progress analysis](docs/kuberic-progress.md).
@@ -43,6 +45,10 @@ Stage 0 validates digest-reference syntax only. It does not yet require a tag
 or Oracle repository, resolve the registry object, inspect its manifest or
 platforms, establish provenance, or determine the terms governing the selected
 image. Those checks are mandatory before a live fixture uses the reference.
+
+The current Linux x86-64 PoC pins
+`container-registry.oracle.com/database/free@sha256:c4d9b15a1b2240ce90730c23ce298fcdd34f6793792c1b3849181a080009c322`
+(tag `23.26.3.0` at verification time).
 
 Containers are required for the initial repository profile because:
 
@@ -68,7 +74,7 @@ security patches. See the
 
 | Profile | Edition | Replicas | Replication | Current status |
 |---|---|---:|---|---|
-| `standalone` | Oracle AI Database Free | 1 | None | Contract implemented |
+| `standalone` | Oracle AI Database Free | 1 | None | Contract + test-only live PoC |
 | `standalone` | Enterprise Developer/Enterprise | 1 | None | Contract implemented |
 | `data_guard_physical` | Enterprise Developer/Enterprise | 3 | Oracle Data Guard | Contract only |
 
@@ -84,8 +90,8 @@ accept license terms on behalf of an operator.
 
 - `crates/kuberic-oracle` contains production-safe configuration, raw-row
   parsing, snapshot contracts, and observation admission.
-- `crates/kuberic-oracle-tests` contains cross-crate contract tests and is the
-  future home of explicitly licensed live container fixtures.
+- `crates/kuberic-oracle-tests` contains cross-crate tests, the pure-Rust PoC
+  worker, and the explicitly authorized live container fixture.
 - `docs/design.md` defines deployment ownership, support boundaries, staged
   implementation, and safety rules.
 - `docs/kuberic-progress.md` explains why Oracle SCNs are retained as native
@@ -111,22 +117,24 @@ cargo test --locked --workspace --all-features
 
 No Oracle installation or container runtime is needed for these checks.
 
-## Planned live fixture
+Run the opt-in live proof only after accepting the applicable Oracle terms:
 
-The first live fixture will own exactly one digest-pinned Oracle Free container.
-It will:
+```bash
+KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES \
+KUBERIC_ORACLE_DOCKER_HOST=unix:///path/to/docker.sock \
+just live
+```
 
-1. create an isolated network, volume, container, and credential files;
-2. wait for the listener and database to become ready;
-3. create a least-privileged observation principal;
-4. validate identity, role, open mode, SCN, startup-time restart evidence,
-   future explicit incarnation/resource bindings, TLS, and CLI behavior;
-5. journal immutable resource identities before exposing them to tests; and
-6. remove only resources whose current identities match the journal.
+The live proof requires Linux x86-64, Docker, `strace`, sufficient image
+storage, the pinned Linux image digest, and one local `FREEPDB1` observer. It
+uses Oracle's pure-Rust `oracledb` beta without Instant Client. The fixture
+publishes the listener on host loopback only, verifies worker connection
+destinations, runs positive/authentication/authorization cases serially, and
+removes only identity-matched owned resources.
 
-Production code will connect to an already provisioned database and will never
-implicitly pull an image, accept Oracle terms, start a container, or use a
-container socket.
+This plaintext PoC does not establish the production transport design. A future
+production observer must connect to an already provisioned database with a
+separately reviewed TLS design and will never own Oracle terms or containers.
 
 ## Non-goals
 
