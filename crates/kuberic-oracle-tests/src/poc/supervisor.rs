@@ -54,10 +54,36 @@ pub fn run_worker(
     timeouts: ObserverTimeouts,
     cancellation: &Cancellation,
 ) -> Result<OracleObservation, PocFailure> {
+    run_worker_internal(worker_path, request, timeouts, cancellation, None)
+}
+
+pub fn run_worker_traced(
+    worker_path: &Path,
+    request: WorkerRequest,
+    timeouts: ObserverTimeouts,
+    cancellation: &Cancellation,
+    trace_path: &Path,
+) -> Result<OracleObservation, PocFailure> {
+    run_worker_internal(
+        worker_path,
+        request,
+        timeouts,
+        cancellation,
+        Some(trace_path),
+    )
+}
+
+fn run_worker_internal(
+    worker_path: &Path,
+    request: WorkerRequest,
+    timeouts: ObserverTimeouts,
+    cancellation: &Cancellation,
+    trace_path: Option<&Path>,
+) -> Result<OracleObservation, PocFailure> {
     validate_worker_request(worker_path, &request)?;
     let started = Instant::now();
     let snapshot_deadline = started + Duration::from_millis(timeouts.snapshot_millis);
-    let mut child = spawn_worker(worker_path)?;
+    let mut child = spawn_worker(worker_path, trace_path)?;
     let process_group = child.id() as i32;
     let mut stdin = child
         .stdin
@@ -286,14 +312,28 @@ pub fn run_worker(
     }
 }
 
-fn spawn_worker(worker_path: &Path) -> Result<Child, PocFailure> {
-    let mut command = Command::new(worker_path);
+fn spawn_worker(worker_path: &Path, trace_path: Option<&Path>) -> Result<Child, PocFailure> {
+    let mut command = match trace_path {
+        Some(trace_path) => {
+            if !trace_path.is_absolute() || trace_path.exists() {
+                return Err(capability_failure("worker trace path is invalid"));
+            }
+            let mut command = Command::new("strace");
+            command
+                .args(["-f", "-qq", "-e", "trace=connect", "-o"])
+                .arg(trace_path)
+                .arg(worker_path);
+            command
+        }
+        None => Command::new(worker_path),
+    };
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     unsafe {
         command.pre_exec(|| {
+            libc::umask(0o077);
             if libc::setpgid(0, 0) == 0 {
                 Ok(())
             } else {

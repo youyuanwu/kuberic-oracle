@@ -89,6 +89,10 @@ impl PocFailure {
     pub fn cleanup(&self) -> Option<&PocFailure> {
         self.cleanup.as_deref()
     }
+
+    pub fn fixture_assertion(message: &'static str) -> Self {
+        Self::new(PocStage::Fixture, PocCategory::Fixture, message)
+    }
 }
 
 impl fmt::Display for PocFailure {

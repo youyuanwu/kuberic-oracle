@@ -18,3 +18,13 @@ clippy:
 # Run all server-free tests.
 test:
     cargo test --locked --workspace --all-features
+
+# Run the explicitly authorized, ignored Oracle Free live proof.
+live:
+    cargo test --locked -p kuberic-oracle-tests --test live_observer -- --ignored --exact observes_owned_oracle_free_member --nocapture
+
+# Inspect resources owned by the Oracle Free live proof.
+live-inspect:
+    docker -H "${KUBERIC_ORACLE_DOCKER_HOST:-unix:///var/run/docker.sock}" ps -a --filter name=kuberic-oracle-poc
+    docker -H "${KUBERIC_ORACLE_DOCKER_HOST:-unix:///var/run/docker.sock}" network ls --filter name=kuberic-oracle-poc
+    docker -H "${KUBERIC_ORACLE_DOCKER_HOST:-unix:///var/run/docker.sock}" volume ls --filter name=kuberic-oracle-poc

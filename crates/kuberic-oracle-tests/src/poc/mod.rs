@@ -8,4 +8,4 @@ pub mod worker;
 pub use config::{PocAttemptConfig, PocEndpoint};
 pub use error::{PocCategory, PocFailure, PocStage};
 pub use protocol::{HelperMode, HelperStep, WorkerRequest};
-pub use supervisor::{Cancellation, run_worker};
+pub use supervisor::{Cancellation, run_worker, run_worker_traced};
