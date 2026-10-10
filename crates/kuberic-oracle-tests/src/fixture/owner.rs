@@ -1,6 +1,6 @@
 use std::{
     fs::OpenOptions,
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -94,20 +94,40 @@ impl OwnerClaim {
         if !self.lock_identity.matches_path(&self.lock_path) {
             return Err(cleanup_failure("fixture owner claim identity changed"));
         }
-        std::fs::remove_file(&self.lock_path)
-            .map_err(|_| cleanup_failure("fixture owner claim could not be removed"))?;
-        if self
+        for entry in self
             .root
             .read_dir()
             .map_err(|_| cleanup_failure("fixture root could not be inspected"))?
-            .next()
-            .is_some()
         {
-            return Err(cleanup_failure("fixture root still contains owned files"));
+            let entry =
+                entry.map_err(|_| cleanup_failure("fixture root could not be inspected"))?;
+            if entry.path() != self.lock_path {
+                return Err(cleanup_failure("fixture root still contains owned files"));
+            }
         }
+        std::fs::remove_file(&self.lock_path)
+            .map_err(|_| cleanup_failure("fixture owner claim could not be removed"))?;
         std::fs::remove_dir(&self.root)
             .map_err(|_| cleanup_failure("fixture root could not be removed"))?;
         Ok(())
+    }
+
+    pub fn recover(root: &Path, expected_token: &str) -> Result<Self, PocFailure> {
+        let lock_path = root.join("owner.lock");
+        let lock_identity = FileIdentity::from_path(&lock_path)?;
+        let mut token = String::new();
+        std::fs::File::open(&lock_path)
+            .and_then(|file| file.take(1024).read_to_string(&mut token))
+            .map_err(|_| cleanup_failure("fixture owner claim could not be read"))?;
+        if token != expected_token {
+            return Err(cleanup_failure("fixture owner claim token changed"));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            lock_path,
+            lock_identity,
+            token,
+        })
     }
 }
 
@@ -128,6 +148,7 @@ pub struct OwnershipJournal {
     pub username_file: Option<(PathBuf, FileIdentity)>,
     pub password_file: Option<(PathBuf, FileIdentity)>,
     pub admin_env_file: Option<(PathBuf, FileIdentity)>,
+    pub temporary_files: Vec<(PathBuf, FileIdentity)>,
 }
 
 impl OwnershipJournal {
@@ -144,10 +165,30 @@ impl OwnershipJournal {
             .map_err(|_| fixture_failure("fixture journal could not be created"))?;
         file.write_all(&encoded)
             .and_then(|()| file.sync_all())
-            .map_err(|_| fixture_failure("fixture journal could not be written"))?;
-        std::fs::rename(&temporary, &path)
-            .map_err(|_| fixture_failure("fixture journal could not be published"))?;
+            .map_err(|_| {
+                let _ = std::fs::remove_file(&temporary);
+                fixture_failure("fixture journal could not be written")
+            })?;
+        if std::fs::rename(&temporary, &path).is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(fixture_failure("fixture journal could not be published"));
+        }
         FileIdentity::from_path(&path)
+    }
+
+    pub fn load(root: &Path) -> Result<(Self, FileIdentity), PocFailure> {
+        let path = root.join("journal.json");
+        let identity = FileIdentity::from_path(&path)?;
+        let mut encoded = Vec::new();
+        std::fs::File::open(&path)
+            .and_then(|file| file.take(64 * 1024).read_to_end(&mut encoded))
+            .map_err(|_| cleanup_failure("fixture journal could not be read"))?;
+        if !identity.matches_path(&path) {
+            return Err(cleanup_failure("fixture journal changed during read"));
+        }
+        let journal = serde_json::from_slice(&encoded)
+            .map_err(|_| cleanup_failure("fixture journal is invalid"))?;
+        Ok((journal, identity))
     }
 }
 
@@ -189,5 +230,26 @@ mod tests {
         std::fs::rename(&path, root.join("journal.old")).unwrap();
         std::fs::write(&path, b"{}").unwrap();
         assert!(!identity.matches_path(&path));
+    }
+
+    #[test]
+    fn persisted_journal_and_owner_can_be_recovered() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let token = owner.token.clone();
+        let journal = OwnershipJournal {
+            token: token.clone(),
+            ..OwnershipJournal::default()
+        };
+        let identity = journal.persist(&root).unwrap();
+        std::mem::forget(owner);
+
+        let (loaded, loaded_identity) = OwnershipJournal::load(&root).unwrap();
+        assert_eq!(loaded.token, token);
+        assert_eq!(loaded_identity, identity);
+        let recovered = OwnerClaim::recover(&root, &token).unwrap();
+        std::fs::remove_file(root.join("journal.json")).unwrap();
+        recovered.release().unwrap();
     }
 }

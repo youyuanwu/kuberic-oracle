@@ -399,6 +399,11 @@ Implemented test-only PoC:
 - independent live edition, native version, and product/release evidence; and
 - positive, wrong-password, removed-grant, privilege-audit, and cleanup proof.
 
+Interrupted fixtures retain their owner claim and journal. The explicit
+`live-cleanup` path reloads that evidence, distinguishes unavailable Docker
+from confirmed absence, removes containers and networks by recorded immutable
+ID, and retains the journal whenever cleanup remains incomplete.
+
 Remaining production live-observer work:
 
 - select a production-supported Oracle client strategy;

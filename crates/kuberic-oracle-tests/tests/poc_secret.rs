@@ -11,10 +11,10 @@ use kuberic_oracle_tests::poc::{
 use tempfile::tempdir;
 
 #[test]
-fn reads_owner_only_secret_and_trims_one_line_ending() {
+fn reads_owner_only_secret() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("secret");
-    write_file(&path, b"observer\n", 0o600);
+    write_file(&path, b"observer", 0o600);
 
     let secret = read_secret(&path).unwrap();
 
@@ -64,13 +64,19 @@ fn rejects_empty_oversized_and_control_values() {
     let empty = directory.path().join("empty");
     let oversized = directory.path().join("oversized");
     let control = directory.path().join("control");
+    let newline = directory.path().join("newline");
+    let unicode_control = directory.path().join("unicode-control");
     write_file(&empty, b"", 0o600);
     write_file(&oversized, &vec![b'a'; 4097], 0o600);
     write_file(&control, b"bad\tvalue", 0o600);
+    write_file(&newline, b"bad\n", 0o600);
+    write_file(&unicode_control, "bad\u{0085}value".as_bytes(), 0o600);
 
     assert!(read_secret(&empty).is_err());
     assert!(read_secret(&oversized).is_err());
     assert!(read_secret(&control).is_err());
+    assert!(read_secret(&newline).is_err());
+    assert!(read_secret(&unicode_control).is_err());
 }
 
 fn write_file(path: &std::path::Path, contents: &[u8], mode: u32) {

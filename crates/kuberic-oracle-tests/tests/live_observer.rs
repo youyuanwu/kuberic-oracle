@@ -1,7 +1,4 @@
-use std::{
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{os::unix::fs::PermissionsExt, path::Path};
 
 use kuberic_oracle::{
     ConnectionContainer, ContainerDataPolicy, EditionProfile, NativeName, ObservationScope,
@@ -20,8 +17,12 @@ const IMAGE: &str = "container-registry.oracle.com/database/free@sha256:c4d9b15a
 #[test]
 #[ignore = "requires explicit Oracle terms authorization and Docker"]
 fn observes_owned_oracle_free_member() {
-    let fixture = OracleFixture::start(FixtureConfig::from_environment().unwrap()).unwrap();
-    let operation = run_cases(&fixture);
+    let worker = Path::new(env!("CARGO_BIN_EXE_oracle-poc-worker"));
+    let worker_metadata = worker.metadata().unwrap();
+    assert!(worker_metadata.is_file());
+    assert_ne!(worker_metadata.permissions().mode() & 0o111, 0);
+    let mut fixture = OracleFixture::start(FixtureConfig::from_environment().unwrap()).unwrap();
+    let operation = run_cases(&mut fixture);
     let cleanup = fixture.cleanup();
     match (operation, cleanup) {
         (Ok(()), Ok(())) => {}
@@ -33,7 +34,7 @@ fn observes_owned_oracle_free_member() {
     }
 }
 
-fn run_cases(fixture: &OracleFixture) -> Result<(), PocFailure> {
+fn run_cases(fixture: &mut OracleFixture) -> Result<(), PocFailure> {
     let worker = Path::new(env!("CARGO_BIN_EXE_oracle-poc-worker"));
     let observation_request = build_request(fixture, fixture.password_file().to_path_buf())?;
     let trace_path = fixture.connection_trace_path();
@@ -57,14 +58,17 @@ fn run_cases(fixture: &OracleFixture) -> Result<(), PocFailure> {
 
     let (wrong_password, wrong_identity) = fixture.create_wrong_password_file()?;
     let wrong_request = build_request(fixture, wrong_password.clone())?;
-    let wrong_failure = run_worker(
+    let wrong_result = run_worker(
         worker,
         WorkerRequest::Observe(Box::new(wrong_request.clone())),
         wrong_request.timeouts,
         &Cancellation::default(),
-    )
-    .unwrap_err();
+    );
     fixture.remove_owned_file(&wrong_password, wrong_identity)?;
+    let wrong_failure = match wrong_result {
+        Ok(_) => return Err(live_failure("wrong password unexpectedly succeeded")),
+        Err(failure) => failure,
+    };
     if wrong_failure.category() != PocCategory::Authentication {
         return Err(live_failure(
             "wrong password was not classified as authentication",
@@ -74,15 +78,18 @@ fn run_cases(fixture: &OracleFixture) -> Result<(), PocFailure> {
     for view in ["SYS.V_$DATABASE", "SYS.V_$INSTANCE"] {
         fixture.revoke_view(view)?;
         let denied_request = build_request(fixture, fixture.password_file().to_path_buf())?;
-        let denied = run_worker(
+        let denied_result = run_worker(
             worker,
             WorkerRequest::Observe(Box::new(denied_request.clone())),
             denied_request.timeouts,
             &Cancellation::default(),
-        )
-        .unwrap_err();
+        );
         fixture.grant_view(view)?;
         fixture.verify_privileges()?;
+        let denied = match denied_result {
+            Ok(_) => return Err(live_failure("missing grant unexpectedly succeeded")),
+            Err(failure) => failure,
+        };
         if denied.category() != PocCategory::Authorization {
             return Err(live_failure(
                 "missing fixed-view grant was not classified as authorization",
@@ -97,10 +104,6 @@ fn build_request(
     fixture: &OracleFixture,
     password_file: std::path::PathBuf,
 ) -> Result<ObservationRequest, PocFailure> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| live_failure("system time is invalid"))?
-        .as_millis() as u64;
     Ok(ObservationRequest {
         endpoint: fixture.endpoint(),
         username_file: fixture.username_file().to_path_buf(),
@@ -134,8 +137,6 @@ fn build_request(
         },
         target_database_id: fixture.database_id(),
         target_database_unique_name: fixture.database_unique_name().to_owned(),
-        observed_at_unix_millis: now,
-        now_unix_millis: now + 1_000,
         maximum_age_millis: 5_000,
     })
 }

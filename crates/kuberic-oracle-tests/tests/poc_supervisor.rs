@@ -117,6 +117,20 @@ fn oversized_worker_output_is_protocol_failure() {
 }
 
 #[test]
+fn worker_failure_message_is_reconstructed_by_parent() {
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::RawFailure),
+        timeouts(),
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.category(), PocCategory::Protocol);
+    assert!(!failure.to_string().contains("RAW_SECRET_SENTINEL"));
+}
+
+#[test]
 fn escalates_when_worker_ignores_termination() {
     let started = Instant::now();
     let failure = run_worker(
@@ -199,6 +213,38 @@ fn success_is_not_committed_until_the_worker_exits() {
     assert_eq!(failure.stage(), PocStage::Close);
     assert_eq!(failure.category(), PocCategory::Timeout);
     assert!(started.elapsed() <= Duration::from_millis(300));
+}
+
+#[test]
+fn success_with_descendant_is_rejected_and_group_is_terminated() {
+    for inherit_stdout in [false, true] {
+        let started = Instant::now();
+        let failure = run_worker(
+            helper_path(),
+            WorkerRequest::Helper(HelperMode::SuccessWithDescendant {
+                millis: 5_000,
+                inherit_stdout,
+            }),
+            timeouts(),
+            &Cancellation::default(),
+        )
+        .unwrap_err();
+        assert_eq!(failure.category(), PocCategory::Protocol);
+        assert!(started.elapsed() <= Duration::from_millis(300));
+    }
+}
+
+#[test]
+fn trailing_output_after_success_is_rejected() {
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::SuccessThenMalformed),
+        timeouts(),
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.category(), PocCategory::Protocol);
 }
 
 #[test]
@@ -307,4 +353,22 @@ fn rejects_arbitrary_worker_before_launch() {
 
     assert_eq!(failure.category(), PocCategory::Capability);
     assert!(!failure.to_string().contains("/bin/echo"));
+}
+
+#[test]
+fn rejects_invalid_outer_deadlines_before_launch() {
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::Success),
+        ObserverTimeouts {
+            connect_millis: 200,
+            query_millis: 200,
+            snapshot_millis: 500,
+            shutdown_millis: 200,
+        },
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.stage(), PocStage::Configuration);
 }

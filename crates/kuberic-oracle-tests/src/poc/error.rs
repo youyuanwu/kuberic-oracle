@@ -93,6 +93,32 @@ impl PocFailure {
     pub fn fixture_assertion(message: &'static str) -> Self {
         Self::new(PocStage::Fixture, PocCategory::Fixture, message)
     }
+
+    pub(crate) fn sanitized_from_worker(self) -> Self {
+        let message = match self.category {
+            PocCategory::Configuration => "worker configuration failed",
+            PocCategory::Capability => "worker capability is unavailable",
+            PocCategory::Authentication => "Oracle authentication failed",
+            PocCategory::Authorization => "Oracle authorization failed",
+            PocCategory::Transport => "Oracle transport failed",
+            PocCategory::Protocol => "Oracle protocol operation failed",
+            PocCategory::Timeout => "Oracle operation timed out",
+            PocCategory::Cancelled => "Oracle operation was cancelled",
+            PocCategory::RowCount => "fixed query row count was invalid",
+            PocCategory::NativeValue => "Oracle evidence was invalid",
+            PocCategory::IdentityChanged => "Oracle identity changed",
+            PocCategory::Shutdown => "worker shutdown failed",
+            PocCategory::Fixture => "fixture operation failed",
+            PocCategory::Cleanup => "fixture cleanup failed",
+        };
+        Self {
+            stage: self.stage,
+            category: self.category,
+            oracle_code: self.oracle_code,
+            message: message.to_owned(),
+            cleanup: None,
+        }
+    }
 }
 
 impl fmt::Display for PocFailure {

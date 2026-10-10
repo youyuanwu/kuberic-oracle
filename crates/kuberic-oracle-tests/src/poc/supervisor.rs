@@ -2,6 +2,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     os::unix::{
         fs::{MetadataExt, PermissionsExt},
+        io::AsRawFd,
         process::CommandExt,
     },
     path::Path,
@@ -80,7 +81,8 @@ fn run_worker_internal(
     cancellation: &Cancellation,
     trace_path: Option<&Path>,
 ) -> Result<OracleObservation, PocFailure> {
-    validate_worker_request(worker_path, &request)?;
+    validate_supervisor_timeouts(&timeouts)?;
+    validate_worker_request(worker_path, &request, &timeouts)?;
     let started = Instant::now();
     let snapshot_deadline = started + Duration::from_millis(timeouts.snapshot_millis);
     let mut child = spawn_worker(worker_path, trace_path)?;
@@ -154,6 +156,8 @@ fn run_worker_internal(
             protocol_version: PROTOCOL_VERSION,
             request: Box::new(request),
         },
+        hello_deadline,
+        cancellation,
     ) {
         return terminate_with_failure(
             &mut child,
@@ -211,7 +215,12 @@ fn run_worker_internal(
                             );
                         }
                     };
-                    if let Err(failure) = write_command(&mut stdin, &ParentCommand::Arm { stage }) {
+                    if let Err(failure) = write_command(
+                        &mut stdin,
+                        &ParentCommand::Arm { stage },
+                        active_deadline,
+                        cancellation,
+                    ) {
                         return terminate_with_failure(
                             &mut child,
                             process_group,
@@ -254,16 +263,51 @@ fn run_worker_internal(
                             );
                         }
                     };
-                    let _ = reader.join();
-                    if status.success() {
-                        return Ok(*observation);
+                    if !status.success() {
+                        let _ = reader.join();
+                        return Err(protocol_failure(
+                            PocStage::Close,
+                            "worker exited unsuccessfully after success",
+                        ));
                     }
-                    return Err(protocol_failure(
-                        PocStage::Close,
-                        "worker exited unsuccessfully after success",
-                    ));
+                    if group_exists(process_group)? {
+                        let cleanup = terminate_and_reap(
+                            &mut child,
+                            process_group,
+                            cleanup_deadline(&timeouts, snapshot_deadline),
+                        )
+                        .err();
+                        if cleanup.is_none() {
+                            let _ = reader.join();
+                        }
+                        let failure = protocol_failure(
+                            PocStage::Close,
+                            "worker left descendants after success",
+                        );
+                        return Err(match cleanup {
+                            Some(cleanup) => failure.with_cleanup(cleanup),
+                            None => failure,
+                        });
+                    }
+                    if reader.join().is_err() {
+                        return Err(protocol_failure(
+                            PocStage::Close,
+                            "worker output reader failed",
+                        ));
+                    }
+                    if receiver
+                        .try_iter()
+                        .any(|message| !matches!(message, ReaderMessage::Eof))
+                    {
+                        return Err(protocol_failure(
+                            PocStage::Close,
+                            "worker emitted trailing protocol output",
+                        ));
+                    }
+                    return Ok(*observation);
                 }
                 WorkerEvent::Failure { failure } => {
+                    let failure = failure.sanitized_from_worker();
                     let cleanup = terminate_and_reap(
                         &mut child,
                         process_group,
@@ -420,8 +464,13 @@ fn receive_until(
     }
 }
 
-fn write_command(stdin: &mut ChildStdin, command: &ParentCommand) -> Result<(), PocFailure> {
-    let encoded = serde_json::to_vec(command).map_err(|_| {
+fn write_command(
+    stdin: &mut ChildStdin,
+    command: &ParentCommand,
+    deadline: Instant,
+    cancellation: &Cancellation,
+) -> Result<(), PocFailure> {
+    let mut encoded = serde_json::to_vec(command).map_err(|_| {
         protocol_failure(PocStage::Handshake, "worker command could not be encoded")
     })?;
     if encoded.len() >= MAX_PROTOCOL_BYTES {
@@ -430,11 +479,58 @@ fn write_command(stdin: &mut ChildStdin, command: &ParentCommand) -> Result<(), 
             "worker command exceeds the protocol bound",
         ));
     }
-    stdin
-        .write_all(&encoded)
-        .and_then(|()| stdin.write_all(b"\n"))
-        .and_then(|()| stdin.flush())
-        .map_err(|_| protocol_failure(PocStage::Handshake, "worker input pipe failed"))
+    encoded.push(b'\n');
+    set_nonblocking(stdin)?;
+    let mut offset = 0usize;
+    while offset < encoded.len() {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(PocFailure::new(
+                PocStage::Handshake,
+                PocCategory::Timeout,
+                "worker command write exceeded its deadline",
+            ));
+        }
+        if cancellation.is_cancelled() {
+            return Err(PocFailure::new(
+                PocStage::Cancellation,
+                PocCategory::Cancelled,
+                "PoC attempt was cancelled",
+            ));
+        }
+        match stdin.write(&encoded[offset..]) {
+            Ok(0) => {
+                return Err(protocol_failure(
+                    PocStage::Handshake,
+                    "worker input pipe closed",
+                ));
+            }
+            Ok(written) => offset += written,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(POLL_INTERVAL.min(deadline - now));
+            }
+            Err(_) => {
+                return Err(protocol_failure(
+                    PocStage::Handshake,
+                    "worker input pipe failed",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_nonblocking(stdin: &ChildStdin) -> Result<(), PocFailure> {
+    let descriptor = stdin.as_raw_fd();
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
+        return Err(protocol_failure(
+            PocStage::Handshake,
+            "worker input pipe could not be bounded",
+        ));
+    }
+    Ok(())
 }
 
 fn deadline_for_stage(
@@ -539,7 +635,9 @@ fn terminate_with_failure(
     reader: thread::JoinHandle<()>,
 ) -> Result<OracleObservation, PocFailure> {
     let cleanup = terminate_and_reap(child, process_group, deadline).err();
-    let _ = reader.join();
+    if cleanup.is_none() {
+        let _ = reader.join();
+    }
     Err(match cleanup {
         Some(cleanup) => failure.with_cleanup(cleanup),
         None => failure,
@@ -603,8 +701,17 @@ fn terminate_and_reap(
     }
 }
 
-fn validate_worker_request(worker_path: &Path, request: &WorkerRequest) -> Result<(), PocFailure> {
+fn validate_worker_request(
+    worker_path: &Path,
+    request: &WorkerRequest,
+    timeouts: &ObserverTimeouts,
+) -> Result<(), PocFailure> {
     if let WorkerRequest::Observe(request) = request {
+        if request.timeouts != *timeouts {
+            return Err(capability_failure(
+                "worker and supervisor deadlines must match",
+            ));
+        }
         PocAttemptConfig {
             request: (**request).clone(),
         }
@@ -655,6 +762,32 @@ fn validate_worker_request(worker_path: &Path, request: &WorkerRequest) -> Resul
         .map_err(|_| capability_failure("worker executable metadata is unavailable"))?;
     if metadata.uid() != unsafe { libc::geteuid() } || metadata.permissions().mode() & 0o111 == 0 {
         return Err(capability_failure("worker executable ownership is invalid"));
+    }
+    Ok(())
+}
+
+fn validate_supervisor_timeouts(timeouts: &ObserverTimeouts) -> Result<(), PocFailure> {
+    const MAX_MILLIS: u64 = 60 * 60 * 1000;
+    if timeouts.shutdown_millis < 20
+        || timeouts.connect_millis <= timeouts.shutdown_millis
+        || timeouts.query_millis <= timeouts.shutdown_millis
+        || timeouts.snapshot_millis <= timeouts.shutdown_millis
+        || timeouts.connect_millis > timeouts.snapshot_millis
+        || timeouts.query_millis > timeouts.snapshot_millis
+        || [
+            timeouts.connect_millis,
+            timeouts.query_millis,
+            timeouts.snapshot_millis,
+            timeouts.shutdown_millis,
+        ]
+        .into_iter()
+        .any(|value| value > MAX_MILLIS)
+    {
+        return Err(PocFailure::new(
+            PocStage::Configuration,
+            PocCategory::Configuration,
+            "supervisor deadline configuration is invalid",
+        ));
     }
     Ok(())
 }

@@ -125,6 +125,10 @@ KUBERIC_ORACLE_DOCKER_HOST=unix:///path/to/docker.sock \
 just live
 ```
 
+If a test process is interrupted after the ownership journal is written, use
+the same environment and run `just live-cleanup`. Cleanup loads the retained
+journal, revalidates immutable identities, and refuses foreign replacements.
+
 The live proof requires Linux x86-64, Docker, `strace`, sufficient image
 storage, the pinned Linux image digest, and one local `FREEPDB1` observer. It
 uses Oracle's pure-Rust `oracledb` beta without Instant Client. The fixture

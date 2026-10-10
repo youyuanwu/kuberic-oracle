@@ -138,18 +138,15 @@ fn read_bounded(file: &mut File, expected_length: u64) -> Result<Zeroizing<Vec<u
     Ok(bytes)
 }
 
-fn normalize_secret(mut bytes: Zeroizing<Vec<u8>>) -> Result<Zeroizing<String>, PocFailure> {
-    if bytes.ends_with(b"\n") {
-        bytes.pop();
-        if bytes.ends_with(b"\r") {
-            bytes.pop();
-        }
-    }
-    if bytes.is_empty() || bytes.iter().any(|byte| byte.is_ascii_control()) {
+fn normalize_secret(bytes: Zeroizing<Vec<u8>>) -> Result<Zeroizing<String>, PocFailure> {
+    if bytes.is_empty() {
         return Err(secret_failure("credential value is invalid"));
     }
     let value = std::str::from_utf8(&bytes)
         .map_err(|_| secret_failure("credential value must be UTF-8"))?;
+    if value.chars().any(char::is_control) {
+        return Err(secret_failure("credential value is invalid"));
+    }
     Ok(Zeroizing::new(value.to_owned()))
 }
 

@@ -28,3 +28,7 @@ live-inspect:
     docker -H "${KUBERIC_ORACLE_DOCKER_HOST:-unix:///var/run/docker.sock}" ps -a --filter name=kuberic-oracle-poc
     docker -H "${KUBERIC_ORACLE_DOCKER_HOST:-unix:///var/run/docker.sock}" network ls --filter name=kuberic-oracle-poc
     docker -H "${KUBERIC_ORACLE_DOCKER_HOST:-unix:///var/run/docker.sock}" volume ls --filter name=kuberic-oracle-poc
+
+# Recover and clean an interrupted fixture from its identity journal.
+live-cleanup:
+    cargo run --locked -p kuberic-oracle-tests --bin oracle-poc-cleanup

@@ -1,7 +1,8 @@
 use std::{
     cell::Cell,
+    ffi::CString,
     fs::OpenOptions,
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -22,6 +23,8 @@ const NETWORK_NAME: &str = "kuberic-oracle-poc-network";
 const VOLUME_NAME: &str = "kuberic-oracle-poc-volume";
 const CONTAINER_NAME: &str = "kuberic-oracle-poc-database";
 const OBSERVER: &str = "KUBERIC_OBSERVER";
+const MAX_DOCKER_OUTPUT_BYTES: usize = 1024 * 1024;
+const DOCKER_OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct OracleFixture {
     config: FixtureConfig,
@@ -32,6 +35,7 @@ pub struct OracleFixture {
     database_id: u64,
     database_unique_name: String,
     trace_identity: Cell<Option<FileIdentity>>,
+    cleanup_attempted: bool,
 }
 
 impl OracleFixture {
@@ -54,8 +58,10 @@ impl OracleFixture {
             database_id: 0,
             database_unique_name: String::new(),
             trace_identity: Cell::new(None),
+            cleanup_attempted: false,
         };
         if let Err(operation) = fixture.start_inner() {
+            fixture.cleanup_attempted = true;
             let cleanup = fixture.cleanup_inner().err();
             return Err(match cleanup {
                 Some(cleanup) => operation.with_cleanup(cleanup),
@@ -63,6 +69,23 @@ impl OracleFixture {
             });
         }
         Ok(fixture)
+    }
+
+    pub fn cleanup_existing(config: FixtureConfig) -> Result<(), PocFailure> {
+        let (journal, journal_identity) = OwnershipJournal::load(&config.root)?;
+        let owner = OwnerClaim::recover(&config.root, &journal.token)?;
+        let mut fixture = Self {
+            config,
+            owner: Some(owner),
+            journal,
+            journal_identity: Some(journal_identity),
+            credentials: None,
+            database_id: 0,
+            database_unique_name: String::new(),
+            trace_identity: Cell::new(None),
+            cleanup_attempted: true,
+        };
+        fixture.cleanup_inner()
     }
 
     pub fn endpoint(&self) -> PocEndpoint {
@@ -85,7 +108,7 @@ impl OracleFixture {
         &self.database_unique_name
     }
 
-    pub fn create_wrong_password_file(&self) -> Result<(PathBuf, FileIdentity), PocFailure> {
+    pub fn create_wrong_password_file(&mut self) -> Result<(PathBuf, FileIdentity), PocFailure> {
         let path = self.config.root.join("wrong-password");
         let mut file = OpenOptions::new()
             .write(true)
@@ -96,16 +119,36 @@ impl OracleFixture {
         file.write_all(b"definitely-wrong-password")
             .and_then(|()| file.sync_all())
             .map_err(|_| fixture_failure("wrong-password file could not be written"))?;
-        Ok((path.clone(), FileIdentity::from_path(&path)?))
+        let identity = FileIdentity::from_path(&path)?;
+        self.journal.temporary_files.push((path.clone(), identity));
+        if let Err(error) = self.persist_journal() {
+            let _ = std::fs::remove_file(&path);
+            self.journal
+                .temporary_files
+                .retain(|(owned, _)| owned != &path);
+            return Err(error);
+        }
+        Ok((path, identity))
     }
 
     pub fn connection_trace_path(&self) -> PathBuf {
         self.config.root.join("worker-connect.trace")
     }
 
-    pub fn verify_loopback_trace(&self, path: &Path) -> Result<FileIdentity, PocFailure> {
+    pub fn verify_loopback_trace(&mut self, path: &Path) -> Result<FileIdentity, PocFailure> {
         let identity = FileIdentity::from_path(path)?;
         self.trace_identity.set(Some(identity));
+        if !self
+            .journal
+            .temporary_files
+            .iter()
+            .any(|(owned, _)| owned == path)
+        {
+            self.journal
+                .temporary_files
+                .push((path.to_path_buf(), identity));
+            self.persist_journal()?;
+        }
         let contents = std::fs::read_to_string(path)
             .map_err(|_| fixture_failure("worker connection trace is unavailable"))?;
         let mut connect_count = 0usize;
@@ -133,7 +176,7 @@ impl OracleFixture {
         Ok(identity)
     }
 
-    pub fn remove_connection_trace(&self, path: &Path) -> Result<(), PocFailure> {
+    pub fn remove_connection_trace(&mut self, path: &Path) -> Result<(), PocFailure> {
         if !path.starts_with(&self.config.root) {
             return Err(cleanup_failure(
                 "worker trace path escaped the fixture root",
@@ -150,12 +193,20 @@ impl OracleFixture {
         }
     }
 
-    pub fn remove_owned_file(&self, path: &Path, identity: FileIdentity) -> Result<(), PocFailure> {
+    pub fn remove_owned_file(
+        &mut self,
+        path: &Path,
+        identity: FileIdentity,
+    ) -> Result<(), PocFailure> {
         if !identity.matches_path(path) {
             return Err(cleanup_failure("owned temporary file identity changed"));
         }
         std::fs::remove_file(path)
-            .map_err(|_| cleanup_failure("owned temporary file could not be removed"))
+            .map_err(|_| cleanup_failure("owned temporary file could not be removed"))?;
+        self.journal
+            .temporary_files
+            .retain(|(owned, _)| owned != path);
+        self.persist_journal()
     }
 
     pub fn revoke_view(&self, view: &str) -> Result<(), PocFailure> {
@@ -189,11 +240,14 @@ impl OracleFixture {
                  (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO') || ':' || \
                  (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO')) || ':' || \
                  (SELECT COUNT(*) FROM V$PWFILE_USERS WHERE USERNAME='{OBSERVER}') || ':' || \
-                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND OWNER='SYS' AND TABLE_NAME='PRODUCT_COMPONENT_VERSION' AND PRIVILEGE='READ') \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND OWNER='SYS' AND TABLE_NAME='PRODUCT_COMPONENT_VERSION' AND PRIVILEGE='READ') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE IN ('SELECT ANY TABLE','SELECT ANY DICTIONARY','CREATE USER','ALTER USER','DROP USER','ALTER DATABASE','ALTER SYSTEM')) || ':' || \
+                 (SELECT COUNT(*) FROM DBA_ROLE_PRIVS WHERE GRANTEE='PUBLIC') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_COL_PRIVS WHERE GRANTEE='{OBSERVER}') \
                  FROM DUAL"
             ),
         )?;
-        if result != "0:1:1:0:2:2:0:0:1" {
+        if result != "0:1:1:0:2:2:0:0:1:0:0:0" {
             return Err(fixture_failure(
                 "observer effective privileges exceed the PoC profile",
             ));
@@ -202,6 +256,7 @@ impl OracleFixture {
     }
 
     pub fn cleanup(mut self) -> Result<(), PocFailure> {
+        self.cleanup_attempted = true;
         self.cleanup_inner()
     }
 
@@ -261,23 +316,26 @@ impl OracleFixture {
             .into_owned();
         self.journal.container_expected = true;
         self.persist_journal()?;
-        self.journal.container_id = self.docker(&[
-            "run",
-            "-d",
-            "--name",
-            CONTAINER_NAME,
-            "--label",
-            &format!("kuberic.oracle.owner={}", self.journal.token),
-            "--network",
-            NETWORK_NAME,
-            "--volume",
-            &format!("{VOLUME_NAME}:/opt/oracle/oradata"),
-            "--publish",
-            "127.0.0.1::1521",
-            "--env-file",
-            &admin_env_file,
-            IMAGE,
-        ])?;
+        self.journal.container_id = self.docker_with_timeout(
+            &[
+                "run",
+                "-d",
+                "--name",
+                CONTAINER_NAME,
+                "--label",
+                &format!("kuberic.oracle.owner={}", self.journal.token),
+                "--network",
+                NETWORK_NAME,
+                "--volume",
+                &format!("{VOLUME_NAME}:/opt/oracle/oradata"),
+                "--publish",
+                "127.0.0.1::1521",
+                "--env-file",
+                &admin_env_file,
+                IMAGE,
+            ],
+            Duration::from_secs(self.config.startup_timeout_seconds),
+        )?;
         self.persist_journal()?;
         self.wait_ready()?;
         self.journal.host_port = self.discover_port()?;
@@ -307,6 +365,15 @@ impl OracleFixture {
         if architecture != "x86_64" {
             return Err(fixture_failure("Docker architecture is unsupported"));
         }
+        let strace = Command::new("strace")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| fixture_failure("strace is required for the live PoC"))?;
+        if !strace.success() {
+            return Err(fixture_failure("strace is required for the live PoC"));
+        }
         for (kind, name) in [
             ("container", CONTAINER_NAME),
             ("network", NETWORK_NAME),
@@ -320,7 +387,16 @@ impl OracleFixture {
             .docker(&["image", "inspect", IMAGE, "--format", "{{.Id}}"])
             .is_err()
         {
-            self.docker(&["pull", IMAGE])?;
+            let docker_root = self.docker(&["info", "--format", "{{.DockerRootDir}}"])?;
+            if available_bytes(Path::new(&docker_root))? < 12 * 1024 * 1024 * 1024 {
+                return Err(fixture_failure(
+                    "Docker storage is insufficient for the Oracle image",
+                ));
+            }
+            self.docker_with_timeout(
+                &["pull", IMAGE],
+                Duration::from_secs(self.config.startup_timeout_seconds),
+            )?;
         }
         Ok(())
     }
@@ -328,12 +404,19 @@ impl OracleFixture {
     fn wait_ready(&self) -> Result<(), PocFailure> {
         let deadline = Instant::now() + Duration::from_secs(self.config.startup_timeout_seconds);
         loop {
-            let status = self.docker(&[
-                "inspect",
-                CONTAINER_NAME,
-                "--format",
-                "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
-            ])?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(fixture_failure("Oracle container readiness timed out"));
+            }
+            let status = self.docker_with_timeout(
+                &[
+                    "inspect",
+                    CONTAINER_NAME,
+                    "--format",
+                    "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+                ],
+                remaining.min(Duration::from_secs(30)),
+            )?;
             match status.as_str() {
                 "healthy" => return Ok(()),
                 "unhealthy" | "exited" | "dead" => {
@@ -470,8 +553,8 @@ impl OracleFixture {
         if self.journal.container_expected {
             match self.docker_exists("container", CONTAINER_NAME) {
                 Ok(true) => match self.verify_container_identity() {
-                    Ok(()) => {
-                        if self.docker(&["rm", "-f", CONTAINER_NAME]).is_err() {
+                    Ok(container_id) => {
+                        if self.docker(&["rm", "-f", &container_id]).is_err() {
                             failure = Some(cleanup_failure("owned container could not be removed"));
                         }
                     }
@@ -484,8 +567,8 @@ impl OracleFixture {
         if self.journal.network_expected {
             match self.docker_exists("network", NETWORK_NAME) {
                 Ok(true) => match self.verify_network_identity() {
-                    Ok(()) => {
-                        if self.docker(&["network", "rm", NETWORK_NAME]).is_err()
+                    Ok(network_id) => {
+                        if self.docker(&["network", "rm", &network_id]).is_err()
                             && failure.is_none()
                         {
                             failure = Some(cleanup_failure("owned network could not be removed"));
@@ -516,7 +599,15 @@ impl OracleFixture {
                 Err(_) => {}
             }
         }
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
 
+        for (path, identity) in self.journal.temporary_files.clone() {
+            if path.exists() {
+                self.remove_owned_file(&path, identity)?;
+            }
+        }
         for owned in [
             self.journal.username_file.as_ref(),
             self.journal.password_file.as_ref(),
@@ -525,7 +616,9 @@ impl OracleFixture {
         .into_iter()
         .flatten()
         {
-            if owned.1.matches_path(&owned.0) {
+            if !owned.0.exists() {
+                continue;
+            } else if owned.1.matches_path(&owned.0) {
                 if std::fs::remove_file(&owned.0).is_err() && failure.is_none() {
                     failure = Some(cleanup_failure(
                         "owned credential file could not be removed",
@@ -536,14 +629,19 @@ impl OracleFixture {
             }
         }
         self.credentials = None;
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
 
         let journal_path = self.config.root.join("journal.json");
-        if let Some(identity) = self.journal_identity.take() {
+        if let Some(identity) = self.journal_identity {
             if identity.matches_path(&journal_path) {
-                if std::fs::remove_file(&journal_path).is_err() && failure.is_none() {
+                if std::fs::remove_file(&journal_path).is_err() {
                     failure = Some(cleanup_failure("fixture journal could not be removed"));
+                } else {
+                    self.journal_identity = None;
                 }
-            } else if failure.is_none() {
+            } else {
                 failure = Some(cleanup_failure("fixture journal identity changed"));
             }
         }
@@ -559,7 +657,7 @@ impl OracleFixture {
         }
     }
 
-    fn verify_container_identity(&self) -> Result<(), PocFailure> {
+    fn verify_container_identity(&mut self) -> Result<String, PocFailure> {
         let current = self.docker(&["inspect", CONTAINER_NAME, "--format", "{{.Id}}"])?;
         if !self.journal.container_id.is_empty() && current != self.journal.container_id {
             return Err(cleanup_failure("owned container identity changed"));
@@ -577,10 +675,14 @@ impl OracleFixture {
         if image != self.journal.image {
             return Err(cleanup_failure("owned container image changed"));
         }
-        Ok(())
+        if self.journal.container_id.is_empty() {
+            self.journal.container_id = current.clone();
+            self.persist_journal()?;
+        }
+        Ok(current)
     }
 
-    fn verify_network_identity(&self) -> Result<(), PocFailure> {
+    fn verify_network_identity(&mut self) -> Result<String, PocFailure> {
         let current = self.docker(&["network", "inspect", NETWORK_NAME, "--format", "{{.Id}}"])?;
         if !self.journal.network_id.is_empty() && current != self.journal.network_id {
             return Err(cleanup_failure("owned network identity changed"));
@@ -595,7 +697,11 @@ impl OracleFixture {
         if label != self.journal.token {
             return Err(cleanup_failure("owned network ownership changed"));
         }
-        Ok(())
+        if self.journal.network_id.is_empty() {
+            self.journal.network_id = current.clone();
+            self.persist_journal()?;
+        }
+        Ok(current)
     }
 
     fn verify_volume_identity(&self) -> Result<(), PocFailure> {
@@ -623,64 +729,107 @@ impl OracleFixture {
     }
 
     fn docker_exists(&self, kind: &str, name: &str) -> Result<bool, PocFailure> {
-        let status = Command::new("docker")
-            .arg("-H")
-            .arg(&self.config.docker_host)
-            .arg(kind)
-            .arg("inspect")
-            .arg(name)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|_| fixture_failure("Docker command could not be started"))?;
-        Ok(status.success())
+        let output = match kind {
+            "container" => self.docker(&["ps", "-a", "--format", "{{.Names}}"])?,
+            "network" => self.docker(&["network", "ls", "--format", "{{.Name}}"])?,
+            "volume" => self.docker(&["volume", "ls", "--format", "{{.Name}}"])?,
+            _ => return Err(fixture_failure("unsupported Docker resource type")),
+        };
+        Ok(output.lines().any(|value| value == name))
     }
 
     fn docker(&self, args: &[&str]) -> Result<String, PocFailure> {
-        let output = Command::new("docker")
-            .arg("-H")
-            .arg(&self.config.docker_host)
-            .args(args)
-            .output()
-            .map_err(|_| fixture_failure("Docker command could not be started"))?;
-        if !output.status.success() {
-            return Err(fixture_failure("Docker fixture operation failed"));
-        }
-        String::from_utf8(output.stdout)
-            .map(|value| value.trim().to_owned())
-            .map_err(|_| fixture_failure("Docker command output was invalid"))
+        self.docker_with_timeout(args, DOCKER_OPERATION_TIMEOUT)
+    }
+
+    fn docker_with_timeout(&self, args: &[&str], timeout: Duration) -> Result<String, PocFailure> {
+        self.run_docker(args, None, timeout)
     }
 
     fn docker_with_input(&self, args: &[&str], input: &[u8]) -> Result<String, PocFailure> {
-        let mut child = Command::new("docker")
+        if input.len() > 4096 {
+            return Err(fixture_failure("Docker input exceeds the fixture bound"));
+        }
+        self.run_docker(args, Some(input), DOCKER_OPERATION_TIMEOUT)
+    }
+
+    fn run_docker(
+        &self,
+        args: &[&str],
+        input: Option<&[u8]>,
+        timeout: Duration,
+    ) -> Result<String, PocFailure> {
+        let mut child = Command::new(&self.config.docker_program)
             .arg("-H")
             .arg(&self.config.docker_host)
             .args(args)
-            .stdin(Stdio::piped())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| fixture_failure("Docker command could not be started"))?;
-        child
-            .stdin
+        let stdout = child
+            .stdout
             .take()
-            .ok_or_else(|| fixture_failure("Docker input pipe is unavailable"))?
-            .write_all(input)
-            .map_err(|_| fixture_failure("Docker input pipe failed"))?;
-        let output = child
-            .wait_with_output()
-            .map_err(|_| fixture_failure("Docker command could not be collected"))?;
-        if !output.status.success() {
-            return Err(fixture_failure("Oracle fixture SQL failed"));
+            .ok_or_else(|| fixture_failure("Docker output pipe is unavailable"))?;
+        let reader = thread::spawn(move || {
+            let mut output = Vec::new();
+            stdout
+                .take(MAX_DOCKER_OUTPUT_BYTES as u64 + 1)
+                .read_to_end(&mut output)
+                .map(|_| output)
+        });
+        if let Some(input) = input {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| fixture_failure("Docker input pipe is unavailable"))?;
+            if stdin.write_all(input).is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(fixture_failure("Docker input pipe failed"));
+            }
         }
-        String::from_utf8(output.stdout)
-            .map_err(|_| fixture_failure("Oracle fixture SQL output was invalid"))
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|_| fixture_failure("Docker command status is unavailable"))?
+            {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(fixture_failure("Docker command timed out"));
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        let output = reader
+            .join()
+            .map_err(|_| fixture_failure("Docker output reader failed"))?
+            .map_err(|_| fixture_failure("Docker command output could not be read"))?;
+        if output.len() > MAX_DOCKER_OUTPUT_BYTES {
+            return Err(fixture_failure("Docker command output exceeded the bound"));
+        }
+        if !status.success() {
+            return Err(fixture_failure("Docker fixture operation failed"));
+        }
+        String::from_utf8(output)
+            .map(|value| value.trim().to_owned())
+            .map_err(|_| fixture_failure("Docker command output was invalid"))
     }
 }
 
 impl Drop for OracleFixture {
     fn drop(&mut self) {
-        if self.owner.is_some() {
+        if self.owner.is_some() && !self.cleanup_attempted {
             let _ = self.cleanup_inner();
         }
     }
@@ -692,4 +841,121 @@ fn fixture_failure(message: &'static str) -> PocFailure {
 
 fn cleanup_failure(message: &'static str) -> PocFailure {
     PocFailure::new(PocStage::Cleanup, PocCategory::Cleanup, message)
+}
+
+fn available_bytes(path: &Path) -> Result<u64, PocFailure> {
+    let encoded = CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| fixture_failure("Docker root path is invalid"))?;
+    let mut statistics = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe { libc::statvfs(encoded.as_ptr(), statistics.as_mut_ptr()) } != 0 {
+        return Err(fixture_failure("Docker storage could not be inspected"));
+    }
+    let statistics = unsafe { statistics.assume_init() };
+    Ok(statistics.f_bavail.saturating_mul(statistics.f_frsize))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn cleanup_preserves_journal_when_docker_is_unavailable() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fail");
+        write_script(&docker, "#!/bin/sh\nexit 1\n");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            image: IMAGE.to_owned(),
+            ..OwnershipJournal::default()
+        };
+        let journal_identity = journal.persist(&root).unwrap();
+        let mut fixture = test_fixture(root.clone(), docker, owner, journal, journal_identity);
+
+        assert!(fixture.cleanup_inner().is_err());
+        assert!(root.join("journal.json").exists());
+        assert!(root.join("owner.lock").exists());
+    }
+
+    #[test]
+    fn cleanup_removes_container_by_recorded_id() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let marker = directory.path().join("removed");
+        let docker = directory.path().join("docker-fake");
+        write_script(
+            &docker,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo token ;;\n\
+                     *) echo container-id ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = rm ]; then echo \"$3\" > '{}'; exit 0; fi\n\
+                 exit 0\n",
+                marker.display()
+            ),
+        );
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: "token".to_owned(),
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            container_id: "container-id".to_owned(),
+            image: IMAGE.to_owned(),
+            ..OwnershipJournal::default()
+        };
+        let journal_identity = journal.persist(&root).unwrap();
+        let mut fixture = test_fixture(root, docker, owner, journal, journal_identity);
+
+        fixture.cleanup_inner().unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap().trim(),
+            "container-id"
+        );
+    }
+
+    fn test_fixture(
+        root: PathBuf,
+        docker_program: PathBuf,
+        owner: OwnerClaim,
+        journal: OwnershipJournal,
+        journal_identity: FileIdentity,
+    ) -> OracleFixture {
+        OracleFixture {
+            config: FixtureConfig {
+                docker_program,
+                docker_host: "fake".to_owned(),
+                root,
+                startup_timeout_seconds: 1,
+            },
+            owner: Some(owner),
+            journal,
+            journal_identity: Some(journal_identity),
+            credentials: None,
+            database_id: 0,
+            database_unique_name: String::new(),
+            trace_identity: Cell::new(None),
+            cleanup_attempted: true,
+        }
+    }
+
+    fn write_script(path: &Path, contents: &str) {
+        std::fs::write(path, contents).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
 }

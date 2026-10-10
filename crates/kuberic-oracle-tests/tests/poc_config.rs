@@ -46,8 +46,6 @@ fn request() -> ObservationRequest {
         },
         target_database_id: DatabaseId::new(42).unwrap().value(),
         target_database_unique_name: "FREE".to_owned(),
-        observed_at_unix_millis: 9_900,
-        now_unix_millis: 10_000,
         maximum_age_millis: 500,
     }
 }

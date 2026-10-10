@@ -23,8 +23,6 @@ pub struct ObservationRequest {
     pub timeouts: ObserverTimeouts,
     pub target_database_id: u64,
     pub target_database_unique_name: String,
-    pub observed_at_unix_millis: u64,
-    pub now_unix_millis: u64,
     pub maximum_age_millis: u64,
 }
 
@@ -44,7 +42,10 @@ pub enum HelperMode {
     Panic { stage: PocStage },
     MalformedOutput,
     OversizedOutput,
+    RawFailure,
     SuccessThenHang { millis: u64 },
+    SuccessWithDescendant { millis: u64, inherit_stdout: bool },
+    SuccessThenMalformed,
     IgnoreTerm { stage: PocStage, millis: u64 },
     SpawnDescendant { stage: PocStage, millis: u64 },
     ExitWithDescendant { stage: PocStage, millis: u64 },

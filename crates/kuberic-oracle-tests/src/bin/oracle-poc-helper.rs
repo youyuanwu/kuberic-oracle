@@ -89,6 +89,15 @@ fn run() -> Result<(), HelperError> {
                 .map_err(|_| HelperError)?;
             output.flush().map_err(|_| HelperError)
         }
+        HelperMode::RawFailure => {
+            output
+                .write_all(
+                    br#"{"event":"failure","failure":{"stage":"connect","category":"protocol","oracle_code":null,"message":"RAW_SECRET_SENTINEL","cleanup":null}}"#,
+                )
+                .map_err(|_| HelperError)?;
+            output.write_all(b"\n").map_err(|_| HelperError)?;
+            output.flush().map_err(|_| HelperError)
+        }
         HelperMode::SuccessThenHang { millis } => {
             armed_stage(&mut input, &mut output, PocStage::Connect)?;
             armed_stage(&mut input, &mut output, PocStage::Close)?;
@@ -100,6 +109,43 @@ fn run() -> Result<(), HelperError> {
             )?;
             thread::sleep(Duration::from_millis(millis));
             Ok(())
+        }
+        HelperMode::SuccessWithDescendant {
+            millis,
+            inherit_stdout,
+        } => {
+            armed_stage(&mut input, &mut output, PocStage::Connect)?;
+            armed_stage(&mut input, &mut output, PocStage::Close)?;
+            let mut descendant = Command::new("sh");
+            descendant
+                .arg("-c")
+                .arg(format!("sleep {}", millis.div_ceil(1000)))
+                .stdin(Stdio::null())
+                .stderr(Stdio::null());
+            if inherit_stdout {
+                descendant.stdout(Stdio::inherit());
+            } else {
+                descendant.stdout(Stdio::null());
+            }
+            let _child = descendant.spawn().map_err(|_| HelperError)?;
+            write_event(
+                &mut output,
+                &WorkerEvent::Success {
+                    observation: Box::new(observation()),
+                },
+            )
+        }
+        HelperMode::SuccessThenMalformed => {
+            armed_stage(&mut input, &mut output, PocStage::Connect)?;
+            armed_stage(&mut input, &mut output, PocStage::Close)?;
+            write_event(
+                &mut output,
+                &WorkerEvent::Success {
+                    observation: Box::new(observation()),
+                },
+            )?;
+            output.write_all(b"not-json\n").map_err(|_| HelperError)?;
+            output.flush().map_err(|_| HelperError)
         }
         HelperMode::IgnoreTerm { stage, millis } => {
             armed_stage(&mut input, &mut output, stage)?;

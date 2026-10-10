@@ -6,6 +6,7 @@ pub const IMAGE: &str = "container-registry.oracle.com/database/free@sha256:c4d9
 
 #[derive(Debug, Clone)]
 pub struct FixtureConfig {
+    pub(crate) docker_program: PathBuf,
     pub(crate) docker_host: String,
     pub(crate) root: PathBuf,
     pub(crate) startup_timeout_seconds: u64,
@@ -30,6 +31,7 @@ impl FixtureConfig {
                 }))
             });
         Ok(Self {
+            docker_program: PathBuf::from("docker"),
             docker_host,
             root,
             startup_timeout_seconds: 900,

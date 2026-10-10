@@ -1,6 +1,6 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use kuberic_oracle::{
@@ -93,7 +93,7 @@ fn observe(
         .set_call_timeout(Some(query_call_timeout(&request)))
         .map_err(|error| classify_driver_error(PocStage::Connect, &error))?;
 
-    let before = query_identity(
+    let (before, observed_at_unix_millis) = query_identity(
         input,
         output,
         &connection,
@@ -103,7 +103,7 @@ fn observe(
     let database = query_database(input, output, &connection, &request)?;
     let instance = query_instance(input, output, &connection, &request)?;
     let product = query_product(input, output, &connection, &request)?;
-    let after = query_identity(
+    let (after, _) = query_identity(
         input,
         output,
         &connection,
@@ -120,7 +120,7 @@ fn observe(
             product,
             after,
         },
-        request.observed_at_unix_millis,
+        observed_at_unix_millis,
     )
     .map_err(classify_contract_error)?;
     let target = ObservationTarget {
@@ -136,7 +136,7 @@ fn observe(
         &request.support,
         &target,
         &observation,
-        request.now_unix_millis,
+        unix_millis()?,
         request.maximum_age_millis,
     )
     .map_err(classify_contract_error)?;
@@ -154,18 +154,22 @@ fn query_identity(
     connection: &oracledb::Connection,
     request: &ObservationRequest,
     stage: PocStage,
-) -> Result<RawObservationIdentity, PocFailure> {
+) -> Result<(RawObservationIdentity, u64), PocFailure> {
     arm(input, output, stage)?;
+    let observed_at = unix_millis()?;
     connection
         .set_call_timeout(Some(query_call_timeout(request)))
         .map_err(|error| classify_driver_error(stage, &error))?;
     let row = query_exactly_one(connection, OBSERVATION_IDENTITY_SQL, stage)?;
-    Ok(RawObservationIdentity {
-        database_id: number_string(&row, "DATABASE_ID", stage)?,
-        database_unique_name: text(&row, "DATABASE_UNIQUE_NAME", stage)?,
-        instance_name: text(&row, "INSTANCE_NAME", stage)?,
-        startup_time: timestamp_string(&row, "STARTUP_TIME", stage)?,
-    })
+    Ok((
+        RawObservationIdentity {
+            database_id: number_string(&row, "DATABASE_ID", stage)?,
+            database_unique_name: text(&row, "DATABASE_UNIQUE_NAME", stage)?,
+            instance_name: text(&row, "INSTANCE_NAME", stage)?,
+            startup_time: timestamp_string(&row, "STARTUP_TIME", stage)?,
+        },
+        observed_at,
+    ))
 }
 
 fn query_database(
@@ -401,6 +405,19 @@ fn row_count_failure(stage: PocStage) -> PocFailure {
 
 fn protocol_failure(stage: PocStage, message: &'static str) -> PocFailure {
     PocFailure::new(stage, PocCategory::Protocol, message)
+}
+
+fn unix_millis() -> Result<u64, PocFailure> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .map_err(|_| {
+            PocFailure::new(
+                PocStage::ParseAdmission,
+                PocCategory::Protocol,
+                "system time is invalid",
+            )
+        })
 }
 
 #[cfg(test)]
