@@ -37,6 +37,12 @@ The first live target is deliberately narrow:
 | Replication | None |
 | Default behavior | Observe only |
 
+The tag-plus-digest form is the intended live-fixture policy. Stage 0 currently
+validates only digest-pinned image-reference syntax; it does not require a tag
+or Oracle repository, resolve the registry object, inspect its manifest or
+platform, establish provenance, or determine the terms applicable to the exact
+image.
+
 The future native-replication profile is separate:
 
 | Area | Future Data Guard contract |
@@ -48,27 +54,37 @@ The future native-replication profile is separate:
 | Protection mode | Explicit later design decision |
 | Failover | Disabled until fencing and promotion proofs are implemented |
 
+The three-member topology is the repository's supported laboratory and
+integration invariant, not an Oracle Data Guard product minimum.
+
 Oracle Free is never represented as Data Guard capable. Running multiple Free
 containers creates isolated standalone databases; it does not create a
 supported physical standby topology.
 
 ## Why containers
 
-Oracle AI Database Free can be installed directly in a supported Oracle Linux
-environment. That is not the initial repository profile.
+Oracle AI Database Free can be installed directly on documented native RPM
+platforms. The current Ubuntu development host is outside the native package
+profile selected for this repository, so direct installation is not the initial
+repository path.
 
 Containers are selected because:
 
-1. the current development and CI hosts are Ubuntu rather than supported native
-   Oracle Linux RPM environments;
+1. the current development and CI hosts are Ubuntu rather than the documented
+   native RPM platforms selected for this repository;
 2. Free edition permits only one installation in a logical environment;
 3. each fixture needs an isolated listener, database home, persistent volume,
    process tree, and cleanup identity;
-4. a container boundary maps naturally to one Kuberic replica incarnation; and
+4. a container boundary provides fixture isolation and a convenient allocation
+   boundary, while durable Kuberic incarnation and immutable resource identity
+   are generated, persisted, and cross-checked separately; and
 5. test-only Docker authority can remain outside production adapter code.
 
 Containerization does not weaken Oracle's edition or license restrictions.
 Image use and Oracle license acceptance remain explicit deployer actions.
+Oracle Free also remains subject to its documented CPU, memory, user-data,
+support, and patching limits; it is not a production Enterprise capacity or
+security-patching analogue.
 
 ## Why the SQL Server adapter is the closest model
 
@@ -93,13 +109,14 @@ by name alone.
 
 The production crate implements:
 
-- immutable container image references pinned by SHA-256 digest;
+- digest-pinned image-reference syntax validation;
 - explicit Free, Enterprise Developer, and Enterprise edition profiles;
 - explicit standalone and physical Data Guard replication profiles;
 - fail-closed rejection of Data Guard with Free edition;
 - exact replica-count contracts for the initial profiles;
-- Oracle DBID, database unique name, role, open mode, log mode, SCN, resetlogs,
-  activation, instance, and artifact types;
+- Oracle DBID, database unique name, role, open mode, a currently supported
+  logging subset, SCN, resetlogs, activation, instance, and initial lineage
+  evidence types;
 - fixed read-only SQL statements for the future observer;
 - observation freshness and future-time rejection;
 - target DBID and `DB_UNIQUE_NAME` validation;
@@ -121,7 +138,7 @@ Production code receives:
 - mounted references to an observation username, password, and trust material;
 - expected DBID and `DB_UNIQUE_NAME`;
 - expected Oracle major version and edition profile;
-- a digest-pinned provisioning artifact identity; and
+- a digest-pinned provisioning image reference; and
 - Kuberic resource, replica, Pod, PVC, and process-session identities when the
   runtime integration is added.
 
@@ -175,13 +192,26 @@ reported together.
 Every attempt will use fixed, read-only queries. Arbitrary SQL is not accepted
 from JSON, environment variables, or command-line arguments.
 
-The initial snapshot reads at least:
+The future live snapshot will read at least:
 
 - `V$DATABASE` for DBID, database name, unique name, role, open mode, current
   SCN, resetlogs SCN, activation number, log mode, force logging, and CDB state;
 - `V$INSTANCE` for instance name, host, version, startup time, instance status,
   and database status; and
 - `PRODUCT_COMPONENT_VERSION` for product and version cross-checking.
+
+Stage 0 only defines caller-populated snapshot fields and query constants. It
+does not establish Oracle-derived product, version, or edition provenance.
+Product/version provenance remains unproven until the live product query is
+parsed and retained. Edition provenance remains unproven until a documented
+live edition source is independently derived and both sources are cross-checked
+against the configured image and support profile.
+
+A mounted physical standby may return `NULL` for `CURRENT_SCN` because the
+database is not open. Before live mounted observation is supported, Stage 1
+must either preserve that nullability explicitly, justify a different native
+mounted-standby position source, or exclude `MOUNTED` from the live observation
+contract. Zero, last-known, or other fabricated SCN substitutes are prohibited.
 
 The observation is bracketed in a future implementation: stable database and
 instance identity must be sampled before and after the detailed reads. A SQL
@@ -198,6 +228,12 @@ Failures remain classified rather than converted to absence:
 - future-dated observation;
 - unsupported edition or version; and
 - unsupported native role or open mode.
+
+Stage 0 models only a subset of Oracle's native logging domains. The Stage 1
+parser must fail closed on `LOG_MODE=MANUAL`, standby-nologging
+`FORCE_LOGGING` states, and every other unmodeled native value unless the Rust
+contract is expanded to retain the value explicitly. Coercing every value other
+than `NO` to Boolean `true` is prohibited.
 
 ## Identity and lineage
 
@@ -227,10 +263,16 @@ A database restored, duplicated, flashed back, activated, or opened with
 resetlogs must not be mistaken for the previous native lineage merely because a
 service endpoint or volume name was reused.
 
+Instance startup time is restart evidence, not a durable incarnation identity.
+Oracle database incarnation, resetlogs lineage, Kuberic replica incarnation,
+Kuberic process session, and immutable container-resource identity are separate
+evidence domains and must be persisted and cross-checked independently.
+
 ## Native progress
 
-`CURRENT_SCN` is retained as an exact Oracle native value. It is not currently
-published as Kuberic progress.
+The Stage 0 snapshot contract can carry `CURRENT_SCN` as an exact
+caller-supplied Oracle native value. No live observer currently populates it,
+and it is not published as Kuberic progress.
 
 Reasons include:
 
@@ -295,6 +337,14 @@ The exact dynamic-performance-view grants will be determined experimentally
 and documented. The observer must fail closed on missing privilege rather than
 retrying with an administrative identity.
 
+The experiment must document whether the observation principal is placed in
+the CDB root or a PDB, which container the observer connects to, applicable
+`CONTAINER_DATA` configuration, and the expected row scope for each supported
+Oracle version. It must prove that the principal sees every required row and no
+broader cross-container scope than intended. Broad dictionary roles or exact
+direct grants must not be prescribed before authoritative evidence and live
+testing establish the minimum.
+
 ## Staged implementation
 
 ### Stage 0: safety contract
@@ -302,10 +352,10 @@ retrying with an administrative identity.
 Implemented:
 
 - workspace, CI, formatting, Clippy, and tests;
-- typed support profiles and pinned artifacts;
+- typed support profiles and digest-pinned image-reference syntax;
 - native snapshot types and fixed query inventory;
-- freshness, identity, edition, version, role, logging, and open-mode
-  admission; and
+- freshness, identity, edition, version, role, and currently modeled logging
+  and open-mode admission; and
 - design and progress documentation.
 
 ### Stage 1: one-member Free observer
@@ -314,8 +364,23 @@ Implemented:
 - define strict observer configuration and secret-file handling;
 - implement TLS-verified connection establishment;
 - parse bracketed fixed-query snapshots;
+- resolve mounted-standby `CURRENT_SCN` nullability through an explicit
+  nullable representation, a justified alternate source, or exclusion from
+  live support;
+- reject or explicitly model `LOG_MODE=MANUAL`, standby-nologging
+  `FORCE_LOGGING` states, and every other native value outside the current Rust
+  domains;
+- define bounded connect, per-query, whole-snapshot, and graceful-shutdown
+  deadlines, validate their ordering, and define polling cadence separately;
+- document and test the selected driver's timeout, cancellation, and
+  interrupted-session reuse behavior, discarding interrupted sessions unless
+  safe reuse is demonstrated;
+- document CDB-root/PDB principal placement, connection container,
+  `CONTAINER_DATA`, and expected row scope;
 - add sanitized CLI output and watch mode; and
-- add server-free parser and failure-classification tests.
+- add server-free parser, timeout-ordering, polling-cadence,
+  cancellation/session-state, multitenant-scope configuration, and
+  failure-classification tests.
 
 ### Stage 2: owned Free container fixture
 
@@ -323,7 +388,8 @@ Implemented:
 - implement exact Docker ownership journaling;
 - launch one digest-pinned Free container;
 - provision the observation principal;
-- validate restart incarnation and volume reuse;
+- validate startup-time restart evidence, explicit incarnation/resource
+  bindings, volume reuse, and the selected CDB/PDB row scope;
 - test authentication, authorization, TLS, timeout, signal, and cleanup paths;
   and
 - keep live tests ignored by default unless CI explicitly opts in.
@@ -342,9 +408,12 @@ Implemented:
 
 - confirm the exact development license and image-distribution path;
 - choose broker-managed or brokerless operation;
-- construct a three-member Enterprise Developer laboratory;
+- construct a three-member Enterprise Developer laboratory as a repository
+  support invariant rather than an Oracle product minimum;
 - document redo transport, apply, gap, lineage, flashback, and reinstatement
   evidence;
+- determine the product and licensing implications of every admitted native
+  state, including `READ ONLY WITH APPLY`, for the selected CDB/PDB use;
 - determine whether Kuberic's fixed progress API can represent the required
   authority safely; and
 - stop if the contract cannot express the required safety evidence.
@@ -387,6 +456,10 @@ The initial implementation excludes:
 
 - [Oracle AI Database Free licensing restrictions](https://docs.oracle.com/en/database/oracle/oracle-database/26/xeinl/licensing-restrictions.html)
 - [Oracle AI Database Free installation guide](https://docs.oracle.com/en/database/oracle/oracle-database/26/xeinl/installing-oracle-database-free.html)
+- [Oracle Database Free FAQ](https://www.oracle.com/database/free/faq/)
+- [Oracle `V$DATABASE` reference](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-DATABASE.html)
+- [Oracle `V$DATABASE_INCARNATION` reference](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-DATABASE_INCARNATION.html)
+- [Oracle dynamic performance views](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/about-dynamic-performance-views.html)
 - [Oracle Data Guard Concepts and Administration](https://docs.oracle.com/en/database/oracle/oracle-database/26/sbydb/)
 - [Oracle Technology Network License Agreement](https://www.oracle.com/downloads/licenses/standard-license.html)
 - [Kuberic PostgreSQL design](https://github.com/youyuanwu/kuberic/blob/main/docs/features/postgres/design.md)

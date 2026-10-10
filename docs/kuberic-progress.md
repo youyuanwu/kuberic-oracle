@@ -6,16 +6,16 @@ This document defines the current boundary between Oracle native progress and
 Kuberic's fixed Service Fabric-compatible replication contract.
 
 The repository does not currently publish Oracle progress to Kuberic. It
-retains exact native values so that a future integration can be evaluated
-without prematurely treating one Oracle number as complete replication or
-promotion authority.
+defines a Stage 0 snapshot contract that can carry exact native values supplied
+by a caller, so that a future integration can be evaluated without prematurely
+treating one Oracle number as complete replication or promotion authority.
 
 ## Standalone Free profile
 
 Oracle AI Database Free is initially supported as one standalone `PRIMARY`
 database opened `READ WRITE`.
 
-The observer retains:
+The Stage 0 snapshot contract has fields for:
 
 - `CURRENT_SCN`;
 - `RESETLOGS_CHANGE#`;
@@ -27,9 +27,17 @@ The observer retains:
 - instance startup time; and
 - Oracle product version and edition.
 
-This evidence supports identity, freshness, restart-incarnation, and health
-validation. It does not represent replicated durability because the profile
-has no native replica.
+No live observer currently populates these fields. Product/version provenance
+remains unproven until the live product query is parsed and retained. Edition
+provenance remains unproven until a documented live edition source is
+independently derived and both sources are cross-checked against the configured
+image and support profile.
+
+When supplied from a trusted future observer, these fields can support
+identity, freshness, startup-time restart evidence, and health validation. They
+do not represent a complete Oracle database incarnation, Kuberic replica
+incarnation, process session, immutable resource binding, or replicated
+durability.
 
 The standalone profile therefore must not claim:
 
@@ -114,6 +122,11 @@ When the Kuberic runtime is added, callbacks may validate fresh native identity
 and role evidence. They must not mutate Oracle or fabricate unsupported
 capabilities.
 
+The left column is behavioral shorthand, not a promise of public Kuberic
+methods with those exact names. Stage 3 must bind each behavior to the actual
+lifecycle, role, progress, configuration, build/remove, data-loss, and returned
+service-address contracts.
+
 The initial mapping is:
 
 | Kuberic behavior | Oracle standalone response |
@@ -138,12 +151,29 @@ The current Rust contract admits a preliminary physical Data Guard snapshot
 only when:
 
 - edition is Enterprise Developer or Enterprise;
-- the configured topology contains exactly three replicas;
+- the configured topology contains exactly three replicas as this repository's
+  supported laboratory invariant, not an Oracle Data Guard minimum;
 - role is `PRIMARY` or `PHYSICAL STANDBY`;
 - the primary is `READ WRITE`;
-- a physical standby is `MOUNTED`, `READ ONLY`, or `READ ONLY WITH APPLY`;
+- the current caller-populated Rust contract accepts a physical standby as
+  `MOUNTED`, `READ ONLY`, or `READ ONLY WITH APPLY`;
 - the database uses `ARCHIVELOG`; and
 - `FORCE LOGGING` is enabled.
+
+Live `MOUNTED` observation remains unresolved because `CURRENT_SCN` may be
+`NULL` while the database is not open. Before that state is supported by a live
+parser, the snapshot must preserve nullability, use a justified alternate
+native source, or exclude `MOUNTED`; zero and last-known substitutes are
+prohibited.
+
+`READ ONLY WITH APPLY` is only a native-state admission value here. It does not
+establish Active Data Guard entitlement for the selected image, option, or
+CDB/PDB use; that remains Stage 4 research.
+
+The current logging representation is also a subset. A live parser must reject
+or explicitly model `LOG_MODE=MANUAL`, standby-nologging `FORCE_LOGGING`
+states, and every other unmodeled native value rather than coercing them into a
+supported value.
 
 This admission is intentionally insufficient for Kuberic progress or
 promotion. It establishes only that the snapshot belongs to the broad native
