@@ -12,7 +12,7 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const BUILD_ID: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PROTOCOL_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationRequest {
     pub endpoint: PocEndpoint,
@@ -43,18 +43,21 @@ pub enum HelperMode {
     Sequence { steps: Vec<HelperStep> },
     Panic { stage: PocStage },
     MalformedOutput,
+    OversizedOutput,
+    SuccessThenHang { millis: u64 },
     IgnoreTerm { stage: PocStage, millis: u64 },
     SpawnDescendant { stage: PocStage, millis: u64 },
+    ExitWithDescendant { stage: PocStage, millis: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "request")]
 pub enum WorkerRequest {
     Observe(Box<ObservationRequest>),
     Helper(HelperMode),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "command")]
 pub enum ParentCommand {
     Start {

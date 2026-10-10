@@ -47,6 +47,8 @@ pub fn read_credentials(
     {
         return Err(secret_failure("credential files must not alias"));
     }
+    verify_path_identity(username_path, username.identity)?;
+    verify_path_identity(password_path, password.identity)?;
     Ok(CredentialPair { username, password })
 }
 
@@ -65,26 +67,39 @@ pub fn read_secret(path: &Path) -> Result<SecretValue, PocFailure> {
         .open(path)
         .map_err(|_| secret_failure("credential file could not be opened safely"))?;
     let before = checked_metadata(&file)?;
+    if link_metadata.dev() != before.device
+        || link_metadata.ino() != before.inode
+        || link_metadata.len() != before.length
+    {
+        return Err(secret_failure(
+            "credential path changed before the file was opened",
+        ));
+    }
     let bytes = read_bounded(&mut file, before.length)?;
     let after = checked_metadata(&file)?;
     if before != after {
         return Err(secret_failure("credential file changed during read"));
     }
-    let path_after = std::fs::symlink_metadata(path)
-        .map_err(|_| secret_failure("credential path changed during read"))?;
-    if !path_after.is_file()
-        || path_after.dev() != after.device
-        || path_after.ino() != after.inode
-        || path_after.len() != after.length
-    {
-        return Err(secret_failure("credential path changed during read"));
-    }
+    verify_path_identity(path, after)?;
 
     let value = normalize_secret(bytes)?;
     Ok(SecretValue {
         value,
         identity: before,
     })
+}
+
+fn verify_path_identity(path: &Path, expected: FileIdentity) -> Result<(), PocFailure> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| secret_failure("credential path changed during read"))?;
+    if !metadata.is_file()
+        || metadata.dev() != expected.device
+        || metadata.ino() != expected.inode
+        || metadata.len() != expected.length
+    {
+        return Err(secret_failure("credential path changed during read"));
+    }
+    Ok(())
 }
 
 fn checked_metadata(file: &File) -> Result<FileIdentity, PocFailure> {
@@ -140,4 +155,46 @@ fn normalize_secret(mut bytes: Zeroizing<Vec<u8>>) -> Result<Zeroizing<String>, 
 
 fn secret_failure(message: &'static str) -> PocFailure {
     PocFailure::new(PocStage::SecretRead, PocCategory::Configuration, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn path_replacement_and_resize_invalidate_identity() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("secret");
+        write_file(&path, b"secret");
+        let secret = read_secret(&path).unwrap();
+
+        std::fs::rename(&path, directory.path().join("old")).unwrap();
+        write_file(&path, b"other");
+        assert!(verify_path_identity(&path, secret.identity).is_err());
+
+        let resized = directory.path().join("resized");
+        write_file(&resized, b"secret");
+        let resized_secret = read_secret(&resized).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&resized)
+            .unwrap()
+            .write_all(b"!")
+            .unwrap();
+        assert!(verify_path_identity(&resized, resized_secret.identity).is_err());
+    }
+
+    fn write_file(path: &Path, contents: &[u8]) {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .unwrap();
+        file.write_all(contents).unwrap();
+    }
 }

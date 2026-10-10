@@ -1,6 +1,9 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::unix::process::CommandExt,
+    os::unix::{
+        fs::{MetadataExt, PermissionsExt},
+        process::CommandExt,
+    },
     path::Path,
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
@@ -15,6 +18,7 @@ use std::{
 use kuberic_oracle::{ObserverTimeouts, OracleObservation};
 
 use super::{
+    config::PocAttemptConfig,
     error::{PocCategory, PocFailure, PocStage},
     protocol::{
         BUILD_ID, MAX_PROTOCOL_BYTES, PROTOCOL_VERSION, ParentCommand, WorkerEvent, WorkerRequest,
@@ -50,6 +54,7 @@ pub fn run_worker(
     timeouts: ObserverTimeouts,
     cancellation: &Cancellation,
 ) -> Result<OracleObservation, PocFailure> {
+    validate_worker_request(worker_path, &request)?;
     let started = Instant::now();
     let snapshot_deadline = started + Duration::from_millis(timeouts.snapshot_millis);
     let mut child = spawn_worker(worker_path)?;
@@ -208,7 +213,7 @@ pub fn run_worker(
                     }
                     let status = match wait_for_exit(
                         &mut child,
-                        snapshot_deadline,
+                        active_deadline,
                         cancellation,
                         PocStage::Close,
                     ) {
@@ -351,19 +356,19 @@ fn receive_until(
     stage: PocStage,
 ) -> Result<ReaderMessage, PocFailure> {
     loop {
-        if cancellation.is_cancelled() {
-            return Err(PocFailure::new(
-                PocStage::Cancellation,
-                PocCategory::Cancelled,
-                "PoC attempt was cancelled",
-            ));
-        }
         let now = Instant::now();
         if now >= deadline {
             return Err(PocFailure::new(
                 stage,
                 PocCategory::Timeout,
                 "PoC stage exceeded its deadline",
+            ));
+        }
+        if cancellation.is_cancelled() {
+            return Err(PocFailure::new(
+                PocStage::Cancellation,
+                PocCategory::Cancelled,
+                "PoC attempt was cancelled",
             ));
         }
         let wait = (deadline - now).min(POLL_INTERVAL);
@@ -376,11 +381,18 @@ fn receive_until(
 }
 
 fn write_command(stdin: &mut ChildStdin, command: &ParentCommand) -> Result<(), PocFailure> {
-    serde_json::to_writer(&mut *stdin, command).map_err(|_| {
+    let encoded = serde_json::to_vec(command).map_err(|_| {
         protocol_failure(PocStage::Handshake, "worker command could not be encoded")
     })?;
+    if encoded.len() >= MAX_PROTOCOL_BYTES {
+        return Err(protocol_failure(
+            PocStage::Handshake,
+            "worker command exceeds the protocol bound",
+        ));
+    }
     stdin
-        .write_all(b"\n")
+        .write_all(&encoded)
+        .and_then(|()| stdin.write_all(b"\n"))
         .and_then(|()| stdin.flush())
         .map_err(|_| protocol_failure(PocStage::Handshake, "worker input pipe failed"))
 }
@@ -454,11 +466,13 @@ fn wait_for_exit(
     stage: PocStage,
 ) -> Result<ExitStatus, PocFailure> {
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|_| protocol_failure(stage, "worker status could not be read"))?
-        {
-            return Ok(status);
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(PocFailure::new(
+                stage,
+                PocCategory::Timeout,
+                "worker did not exit before the deadline",
+            ));
         }
         if cancellation.is_cancelled() {
             return Err(PocFailure::new(
@@ -467,12 +481,11 @@ fn wait_for_exit(
                 "PoC attempt was cancelled",
             ));
         }
-        if Instant::now() >= deadline {
-            return Err(PocFailure::new(
-                stage,
-                PocCategory::Timeout,
-                "worker did not exit before the deadline",
-            ));
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|_| protocol_failure(stage, "worker status could not be read"))?
+        {
+            return Ok(status);
         }
         thread::sleep(POLL_INTERVAL);
     }
@@ -498,23 +511,25 @@ fn terminate_and_reap(
     process_group: i32,
     deadline: Instant,
 ) -> Result<(), PocFailure> {
-    if child
+    let mut child_exited = child
         .try_wait()
         .map_err(|_| shutdown_failure(PocStage::Reap, "worker status could not be read"))?
-        .is_some()
-    {
-        return Ok(());
+        .is_some();
+
+    if group_exists(process_group)? {
+        signal_group(process_group, libc::SIGTERM)?;
     }
 
-    signal_group(process_group, libc::SIGTERM)?;
     let remaining = deadline.saturating_duration_since(Instant::now());
     let kill_at = Instant::now() + remaining / 2;
     loop {
-        if child
-            .try_wait()
-            .map_err(|_| shutdown_failure(PocStage::Reap, "worker status could not be read"))?
-            .is_some()
-        {
+        if !child_exited {
+            child_exited = child
+                .try_wait()
+                .map_err(|_| shutdown_failure(PocStage::Reap, "worker status could not be read"))?
+                .is_some();
+        }
+        if child_exited && !group_exists(process_group)? {
             return Ok(());
         }
         let now = Instant::now();
@@ -524,13 +539,17 @@ fn terminate_and_reap(
         thread::sleep(POLL_INTERVAL.min(kill_at - now));
     }
 
-    signal_group(process_group, libc::SIGKILL)?;
+    if group_exists(process_group)? {
+        signal_group(process_group, libc::SIGKILL)?;
+    }
     loop {
-        if child
-            .try_wait()
-            .map_err(|_| shutdown_failure(PocStage::Reap, "worker status could not be read"))?
-            .is_some()
-        {
+        if !child_exited {
+            child_exited = child
+                .try_wait()
+                .map_err(|_| shutdown_failure(PocStage::Reap, "worker status could not be read"))?
+                .is_some();
+        }
+        if child_exited && !group_exists(process_group)? {
             return Ok(());
         }
         let now = Instant::now();
@@ -541,6 +560,78 @@ fn terminate_and_reap(
             ));
         }
         thread::sleep(POLL_INTERVAL.min(deadline - now));
+    }
+}
+
+fn validate_worker_request(worker_path: &Path, request: &WorkerRequest) -> Result<(), PocFailure> {
+    if let WorkerRequest::Observe(request) = request {
+        PocAttemptConfig {
+            request: (**request).clone(),
+        }
+        .validate()?;
+    }
+    let request_size = serde_json::to_vec(request)
+        .map_err(|_| capability_failure("worker request could not be encoded"))?
+        .len();
+    if request_size >= MAX_PROTOCOL_BYTES / 2 {
+        return Err(capability_failure(
+            "worker request exceeds the protocol bound",
+        ));
+    }
+
+    let expected_name = match request {
+        WorkerRequest::Observe(_) => "oracle-poc-worker",
+        WorkerRequest::Helper(_) => "oracle-poc-helper",
+    };
+    let link_metadata = std::fs::symlink_metadata(worker_path)
+        .map_err(|_| capability_failure("worker executable is unavailable"))?;
+    if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
+        return Err(capability_failure("worker executable is invalid"));
+    }
+    let canonical = worker_path
+        .canonicalize()
+        .map_err(|_| capability_failure("worker executable is unavailable"))?;
+    if canonical.file_name().and_then(|name| name.to_str()) != Some(expected_name) {
+        return Err(capability_failure("worker executable identity is invalid"));
+    }
+
+    let current = std::env::current_exe()
+        .map_err(|_| capability_failure("current executable identity is unavailable"))?;
+    let current_parent = current
+        .parent()
+        .ok_or_else(|| capability_failure("current executable directory is unavailable"))?;
+    let expected_parent =
+        if current_parent.file_name().and_then(|name| name.to_str()) == Some("deps") {
+            current_parent.parent().unwrap_or(current_parent)
+        } else {
+            current_parent
+        };
+    if canonical.parent() != Some(expected_parent) {
+        return Err(capability_failure("worker executable directory is invalid"));
+    }
+
+    let metadata = canonical
+        .metadata()
+        .map_err(|_| capability_failure("worker executable metadata is unavailable"))?;
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.permissions().mode() & 0o111 == 0 {
+        return Err(capability_failure("worker executable ownership is invalid"));
+    }
+    Ok(())
+}
+
+fn group_exists(process_group: i32) -> Result<bool, PocFailure> {
+    let result = unsafe { libc::kill(-process_group, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(shutdown_failure(
+            PocStage::Reap,
+            "worker process group could not be inspected",
+        )),
     }
 }
 
@@ -565,4 +656,8 @@ fn protocol_failure(stage: PocStage, message: &'static str) -> PocFailure {
 
 fn shutdown_failure(stage: PocStage, message: &'static str) -> PocFailure {
     PocFailure::new(stage, PocCategory::Shutdown, message)
+}
+
+fn capability_failure(message: &'static str) -> PocFailure {
+    PocFailure::new(PocStage::Spawn, PocCategory::Capability, message)
 }

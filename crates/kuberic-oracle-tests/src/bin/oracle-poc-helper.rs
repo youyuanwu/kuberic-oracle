@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -11,7 +11,9 @@ use kuberic_oracle::{
 };
 use kuberic_oracle_tests::poc::{
     HelperMode, PocStage,
-    protocol::{BUILD_ID, PROTOCOL_VERSION, ParentCommand, WorkerEvent, WorkerRequest},
+    protocol::{
+        BUILD_ID, MAX_PROTOCOL_BYTES, PROTOCOL_VERSION, ParentCommand, WorkerEvent, WorkerRequest,
+    },
 };
 
 fn main() {
@@ -25,7 +27,7 @@ struct HelperError;
 
 fn run() -> Result<(), HelperError> {
     let stdin = std::io::stdin();
-    let mut input = BufReader::new(stdin.lock());
+    let mut input = BufReader::new(stdin.lock().take(MAX_PROTOCOL_BYTES as u64 + 1));
     let mut output = std::io::stdout().lock();
     write_event(
         &mut output,
@@ -81,6 +83,24 @@ fn run() -> Result<(), HelperError> {
             output.write_all(b"not-json\n").map_err(|_| HelperError)?;
             output.flush().map_err(|_| HelperError)
         }
+        HelperMode::OversizedOutput => {
+            output
+                .write_all(&vec![b'x'; MAX_PROTOCOL_BYTES + 1])
+                .map_err(|_| HelperError)?;
+            output.flush().map_err(|_| HelperError)
+        }
+        HelperMode::SuccessThenHang { millis } => {
+            armed_stage(&mut input, &mut output, PocStage::Connect)?;
+            armed_stage(&mut input, &mut output, PocStage::Close)?;
+            write_event(
+                &mut output,
+                &WorkerEvent::Success {
+                    observation: Box::new(observation()),
+                },
+            )?;
+            thread::sleep(Duration::from_millis(millis));
+            Ok(())
+        }
         HelperMode::IgnoreTerm { stage, millis } => {
             armed_stage(&mut input, &mut output, stage)?;
             unsafe {
@@ -102,6 +122,18 @@ fn run() -> Result<(), HelperError> {
             thread::sleep(Duration::from_millis(millis));
             Ok(())
         }
+        HelperMode::ExitWithDescendant { stage, millis } => {
+            armed_stage(&mut input, &mut output, stage)?;
+            let _child = Command::new("sh")
+                .arg("-c")
+                .arg(format!("sleep {}", millis.div_ceil(1000)))
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|_| HelperError)?;
+            Ok(())
+        }
     }
 }
 
@@ -120,6 +152,9 @@ fn armed_stage(
 fn read_command(input: &mut impl BufRead) -> Result<ParentCommand, HelperError> {
     let mut line = String::new();
     input.read_line(&mut line).map_err(|_| HelperError)?;
+    if line.len() >= MAX_PROTOCOL_BYTES {
+        return Err(HelperError);
+    }
     serde_json::from_str(line.trim_end()).map_err(|_| HelperError)
 }
 

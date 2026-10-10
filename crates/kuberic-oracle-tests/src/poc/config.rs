@@ -55,7 +55,7 @@ impl PocEndpoint {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PocAttemptConfig {
     pub request: ObservationRequest,
 }
@@ -86,7 +86,16 @@ impl PocAttemptConfig {
         if self.request.target_database_id == 0 {
             return Err(config_failure("target database ID must be nonzero"));
         }
-        if self.request.target_database_unique_name.is_empty() {
+        if self.request.target_database_unique_name.is_empty()
+            || self.request.target_database_unique_name.len() > MAX_SERVICE_BYTES
+            || self.request.target_database_unique_name.trim()
+                != self.request.target_database_unique_name
+            || self
+                .request
+                .target_database_unique_name
+                .chars()
+                .any(char::is_control)
+        {
             return Err(config_failure(
                 "target database unique name must not be empty",
             ));
@@ -99,6 +108,7 @@ impl PocAttemptConfig {
 
 fn validate_path(label: &'static str, path: &Path) -> Result<(), PocFailure> {
     if !path.is_absolute()
+        || path.as_os_str().len() > 4096
         || !path
             .components()
             .any(|component| matches!(component, Component::Normal(_)))

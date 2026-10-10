@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     time::Duration,
 };
 
@@ -28,7 +28,11 @@ pub struct WorkerMainError;
 
 pub fn run_observation_worker() -> Result<(), WorkerMainError> {
     let stdin = std::io::stdin();
-    let mut input = BufReader::new(stdin.lock());
+    let mut input = BufReader::new(
+        stdin
+            .lock()
+            .take(super::protocol::MAX_PROTOCOL_BYTES as u64 + 1),
+    );
     let mut output = std::io::stdout().lock();
     write_event(
         &mut output,
@@ -314,6 +318,12 @@ fn arm(
 fn read_command(input: &mut impl BufRead) -> Result<ParentCommand, serde_json::Error> {
     let mut line = String::new();
     input.read_line(&mut line).map_err(serde_json::Error::io)?;
+    if line.len() >= super::protocol::MAX_PROTOCOL_BYTES {
+        return Err(serde_json::Error::io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "worker command exceeds the protocol bound",
+        )));
+    }
     serde_json::from_str(line.trim_end())
 }
 
@@ -328,8 +338,8 @@ fn classify_driver_error(stage: PocStage, error: &Error) -> PocFailure {
         ErrorKind::DbError(database) => {
             let code = database.code();
             let category = match code {
-                1017 => PocCategory::Authentication,
-                942 => PocCategory::Authorization,
+                1017 | 28000 | 28001 => PocCategory::Authentication,
+                942 | 1031 => PocCategory::Authorization,
                 _ => PocCategory::Protocol,
             };
             PocFailure::new(stage, category, "Oracle operation failed").with_oracle_code(code)
@@ -342,6 +352,25 @@ fn classify_driver_error(stage: PocStage, error: &Error) -> PocFailure {
         | ErrorKind::DeadConnection => {
             PocFailure::new(stage, PocCategory::Transport, "Oracle transport failed")
         }
+        ErrorKind::InvalidOracleNumber(_)
+        | ErrorKind::UnsupportedConversion(..)
+        | ErrorKind::ValueWasNull
+        | ErrorKind::OutOfRange(_)
+        | ErrorKind::IntegerTooLarge(..)
+        | ErrorKind::UnexpectedNegativeInteger => PocFailure::new(
+            stage,
+            PocCategory::NativeValue,
+            "Oracle value conversion failed",
+        ),
+        ErrorKind::NoDataFound => row_count_failure(stage),
+        ErrorKind::InvalidConnectString(..)
+        | ErrorKind::NoConnectString
+        | ErrorKind::NoCredentials
+        | ErrorKind::InvalidServiceName(..) => PocFailure::new(
+            PocStage::Configuration,
+            PocCategory::Configuration,
+            "Oracle connection configuration is invalid",
+        ),
         _ => PocFailure::new(
             stage,
             PocCategory::Protocol,

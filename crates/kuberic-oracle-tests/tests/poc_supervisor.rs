@@ -104,6 +104,19 @@ fn malformed_worker_output_is_protocol_failure() {
 }
 
 #[test]
+fn oversized_worker_output_is_protocol_failure() {
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::OversizedOutput),
+        timeouts(),
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.category(), PocCategory::Protocol);
+}
+
+#[test]
 fn escalates_when_worker_ignores_termination() {
     let started = Instant::now();
     let failure = run_worker(
@@ -173,6 +186,70 @@ fn panic_is_reported_as_protocol_failure() {
 }
 
 #[test]
+fn success_is_not_committed_until_the_worker_exits() {
+    let started = Instant::now();
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::SuccessThenHang { millis: 5_000 }),
+        timeouts(),
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.stage(), PocStage::Close);
+    assert_eq!(failure.category(), PocCategory::Timeout);
+    assert!(started.elapsed() <= Duration::from_millis(300));
+}
+
+#[test]
+fn cancellation_wins_after_success_envelope_but_before_clean_exit() {
+    let cancellation = Cancellation::default();
+    let trigger = cancellation.clone();
+    let cancel_thread = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        trigger.cancel();
+    });
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::SuccessThenHang { millis: 5_000 }),
+        timeouts(),
+        &cancellation,
+    )
+    .unwrap_err();
+    cancel_thread.join().unwrap();
+
+    assert_eq!(failure.category(), PocCategory::Cancelled);
+}
+
+#[test]
+fn timeout_wins_over_late_cancellation() {
+    let cancellation = Cancellation::default();
+    let trigger = cancellation.clone();
+    let cancel_thread = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(350));
+        trigger.cancel();
+    });
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::Sleep {
+            stage: PocStage::Connect,
+            millis: 5_000,
+        }),
+        ObserverTimeouts {
+            connect_millis: 500,
+            query_millis: 500,
+            snapshot_millis: 800,
+            shutdown_millis: 200,
+        },
+        &cancellation,
+    )
+    .unwrap_err();
+    cancel_thread.join().unwrap();
+
+    assert_eq!(failure.category(), PocCategory::Timeout);
+}
+
+#[test]
 fn descendant_holding_pipes_is_terminated_with_the_group() {
     let started = Instant::now();
     let failure = run_worker(
@@ -193,4 +270,41 @@ fn descendant_holding_pipes_is_terminated_with_the_group() {
 
     assert_eq!(failure.category(), PocCategory::Timeout);
     assert!(started.elapsed() <= Duration::from_millis(600));
+}
+
+#[test]
+fn descendant_is_terminated_after_group_leader_exits() {
+    let started = Instant::now();
+    let failure = run_worker(
+        helper_path(),
+        WorkerRequest::Helper(HelperMode::ExitWithDescendant {
+            stage: PocStage::Connect,
+            millis: 5_000,
+        }),
+        ObserverTimeouts {
+            connect_millis: 500,
+            query_millis: 500,
+            snapshot_millis: 800,
+            shutdown_millis: 200,
+        },
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.category(), PocCategory::Timeout);
+    assert!(started.elapsed() <= Duration::from_millis(600));
+}
+
+#[test]
+fn rejects_arbitrary_worker_before_launch() {
+    let failure = run_worker(
+        Path::new("/bin/echo"),
+        WorkerRequest::Helper(HelperMode::Success),
+        timeouts(),
+        &Cancellation::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(failure.category(), PocCategory::Capability);
+    assert!(!failure.to_string().contains("/bin/echo"));
 }
