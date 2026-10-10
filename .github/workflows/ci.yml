@@ -16,9 +16,13 @@ concurrency:
 
 jobs:
   validation:
-    name: Server-free validation
+    name: Validation
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: "1"
+      KUBERIC_ORACLE_DOCKER_HOST: unix:///var/run/docker.sock
+      KUBERIC_ORACLE_FIXTURE_ROOT: /tmp/kuberic-oracle-poc
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
@@ -29,5 +33,24 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run strict Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Check Oracle live-test prerequisites
+        run: |
+          test "$(uname -m)" = "x86_64"
+          docker info
+          if ! command -v strace >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes strace
+          fi
+          df -h /
       - name: Run tests
         run: cargo test --locked --workspace --all-features
+      - name: Recover interrupted fixture
+        if: always()
+        run: |
+          if test -f "${KUBERIC_ORACLE_FIXTURE_ROOT}/journal.json"; then
+            cargo run --locked -p kuberic-oracle-tests --bin oracle-poc-cleanup
+          fi
+          ! docker ps -a --format '{{.Names}}' | grep -qx 'kuberic-oracle-poc-database'
+          ! docker network ls --format '{{.Name}}' | grep -qx 'kuberic-oracle-poc-network'
+          ! docker volume ls --format '{{.Name}}' | grep -qx 'kuberic-oracle-poc-volume'
+          test ! -e "${KUBERIC_ORACLE_FIXTURE_ROOT}"

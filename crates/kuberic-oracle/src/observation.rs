@@ -1,6 +1,7 @@
 use crate::{
     ContractError, DatabaseId, DatabaseRole, DecimalScn, EditionProfile, ForceLogging, LogMode,
-    NativeName, OpenMode, OracleObservation, OracleSupportConfig, ReplicationProfile,
+    NativeEdition, NativeName, OpenMode, OracleObservation, OracleSupportConfig,
+    ReplicationProfile,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,10 +40,10 @@ pub fn admit_observation(
     {
         return Err(ContractError::DatabaseIdentityMismatch);
     }
-    if database.edition != config.edition {
+    if observation.instance.native_edition != expected_native_edition(config.edition) {
         return Err(ContractError::EditionMismatch);
     }
-    if database.product_major_version != config.expected_major_version {
+    if observation.product.native_major_version != config.expected_native_major_version {
         return Err(ContractError::MajorVersionMismatch);
     }
 
@@ -73,9 +74,6 @@ fn admit_standalone(database: &crate::DatabaseSnapshot) -> Result<(), ContractEr
 }
 
 fn admit_data_guard(database: &crate::DatabaseSnapshot) -> Result<(), ContractError> {
-    if database.edition == EditionProfile::Free {
-        return Err(ContractError::DataGuardRequiresEnterprise);
-    }
     if database.log_mode != LogMode::ArchiveLog {
         return Err(ContractError::ArchiveLogRequired);
     }
@@ -108,4 +106,13 @@ fn admit_data_guard(database: &crate::DatabaseSnapshot) -> Result<(), ContractEr
     }
 
     Ok(())
+}
+
+const fn expected_native_edition(edition: EditionProfile) -> NativeEdition {
+    match edition {
+        EditionProfile::Free => NativeEdition::Free,
+        EditionProfile::EnterpriseDeveloper | EditionProfile::Enterprise => {
+            NativeEdition::Enterprise
+        }
+    }
 }

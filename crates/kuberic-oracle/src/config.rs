@@ -29,16 +29,16 @@ pub struct OracleSupportConfig {
     pub edition: EditionProfile,
     pub replication: ReplicationProfile,
     pub replica_count: u8,
-    pub expected_major_version: u16,
+    pub expected_native_major_version: u16,
     pub image: PinnedImage,
 }
 
 impl OracleSupportConfig {
     pub fn validate(&self) -> Result<(), ContractError> {
-        if self.expected_major_version < 23 {
+        if self.expected_native_major_version < 23 {
             return Err(ContractError::UnsupportedMajorVersion {
                 minimum: 23,
-                actual: self.expected_major_version,
+                actual: self.expected_native_major_version,
             });
         }
 

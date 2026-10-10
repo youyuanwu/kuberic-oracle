@@ -43,7 +43,9 @@ pub enum ContractError {
         expected: u8,
         actual: u8,
     },
-    #[error("unsupported Oracle major version: expected at least {minimum}, observed {actual}")]
+    #[error(
+        "unsupported Oracle native major version: expected at least {minimum}, observed {actual}"
+    )]
     UnsupportedMajorVersion { minimum: u16, actual: u16 },
     #[error("observation timestamp is in the future")]
     FutureObservation,
@@ -51,9 +53,9 @@ pub enum ContractError {
     StaleObservation,
     #[error("observed database identity does not match the configured target")]
     DatabaseIdentityMismatch,
-    #[error("observed edition does not match the configured profile")]
+    #[error("observed native edition does not match the configured profile")]
     EditionMismatch,
-    #[error("observed Oracle major version does not match the configured artifact")]
+    #[error("observed Oracle native major version does not match the configured profile")]
     MajorVersionMismatch,
     #[error("unsupported native database role for the configured profile")]
     UnsupportedDatabaseRole,
