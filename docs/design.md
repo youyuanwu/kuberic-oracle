@@ -117,7 +117,16 @@ The production crate implements:
 - Oracle DBID, database unique name, role, open mode, a currently supported
   logging subset, SCN, resetlogs, activation, instance, and initial lineage
   evidence types;
-- fixed read-only SQL statements for the future observer;
+- nullable `CURRENT_SCN` representation for mounted-database truth;
+- explicit enabled/disabled force-logging representation;
+- validated credential/trust-file references, multitenant scope, expected row
+  counts, bounded deadlines, and independent polling cadence;
+- fixed read-only SQL statements and driver-independent raw-row contracts;
+- bracketed raw-row parsing with database and instance identity stability
+  checks;
+- fail-closed parsing of supported role, open-mode, logging, Boolean, numeric,
+  product-version, and identity values;
+- retained product/version evidence;
 - observation freshness and future-time rejection;
 - target DBID and `DB_UNIQUE_NAME` validation;
 - edition and major-version validation;
@@ -200,22 +209,23 @@ The future live snapshot will read at least:
   and database status; and
 - `PRODUCT_COMPONENT_VERSION` for product and version cross-checking.
 
-Stage 0 only defines caller-populated snapshot fields and query constants. It
-does not establish Oracle-derived product, version, or edition provenance.
-Product/version provenance remains unproven until the live product query is
-parsed and retained. Edition provenance remains unproven until a documented
-live edition source is independently derived and both sources are cross-checked
-against the configured image and support profile.
+The server-free parser consumes caller-provided raw rows corresponding to the
+fixed queries and retains parsed product/version evidence. It does not execute
+Oracle queries, so Oracle-derived provenance remains unproven until a live
+observer supplies those rows. Edition remains provisional configured input
+until a documented live edition source is independently derived and both
+sources are cross-checked against the configured image and support profile.
 
 A mounted physical standby may return `NULL` for `CURRENT_SCN` because the
-database is not open. Before live mounted observation is supported, Stage 1
-must either preserve that nullability explicitly, justify a different native
-mounted-standby position source, or exclude `MOUNTED` from the live observation
-contract. Zero, last-known, or other fabricated SCN substitutes are prohibited.
+database is not open. The snapshot and admission contracts preserve that
+nullability and permit it only for a mounted standby. Primary and open-standby
+admission require a current SCN. Zero, last-known, or other fabricated SCN
+substitutes are prohibited.
 
-The observation is bracketed in a future implementation: stable database and
-instance identity must be sampled before and after the detailed reads. A SQL
-transaction is not assumed to make dynamic performance views globally atomic.
+The raw-row parser requires stable database and instance identity before and
+after the detailed rows and rejects any change. A future live observer must
+execute that bracket; a SQL transaction is not assumed to make dynamic
+performance views globally atomic.
 
 Failures remain classified rather than converted to absence:
 
@@ -229,11 +239,10 @@ Failures remain classified rather than converted to absence:
 - unsupported edition or version; and
 - unsupported native role or open mode.
 
-Stage 0 models only a subset of Oracle's native logging domains. The Stage 1
-parser must fail closed on `LOG_MODE=MANUAL`, standby-nologging
-`FORCE_LOGGING` states, and every other unmodeled native value unless the Rust
-contract is expanded to retain the value explicitly. Coercing every value other
-than `NO` to Boolean `true` is prohibited.
+The parser models only a subset of Oracle's native logging domains. It fails
+closed on `LOG_MODE=MANUAL`, standby-nologging `FORCE_LOGGING` states, and every
+other unmodeled native value. Future expansion must retain new values
+explicitly; coercing every value other than `NO` to enabled is prohibited.
 
 ## Identity and lineage
 
@@ -360,27 +369,29 @@ Implemented:
 
 ### Stage 1: one-member Free observer
 
+Implemented server-free foundations:
+
+- validated credential/trust-file references without reading their contents;
+- bounded connect, per-query, whole-snapshot, and graceful-shutdown deadlines;
+- independent polling cadence;
+- explicit CDB-root/PDB principal placement, connection container,
+  `CONTAINER_DATA`, and expected row counts;
+- driver-independent fixed-query row contracts and bracketed parsing;
+- nullable mounted-database `CURRENT_SCN`;
+- fail-closed logging and native-value parsing; and
+- server-free configuration, parsing, identity-change, and admission tests.
+
+Remaining live-observer work:
+
 - choose and pin an Oracle Rust driver and Instant Client strategy;
-- define strict observer configuration and secret-file handling;
+- read credential and trust files with bounded secure handling;
 - implement TLS-verified connection establishment;
-- parse bracketed fixed-query snapshots;
-- resolve mounted-standby `CURRENT_SCN` nullability through an explicit
-  nullable representation, a justified alternate source, or exclusion from
-  live support;
-- reject or explicitly model `LOG_MODE=MANUAL`, standby-nologging
-  `FORCE_LOGGING` states, and every other native value outside the current Rust
-  domains;
-- define bounded connect, per-query, whole-snapshot, and graceful-shutdown
-  deadlines, validate their ordering, and define polling cadence separately;
+- execute the fixed query bracket and enforce configured row counts;
 - document and test the selected driver's timeout, cancellation, and
   interrupted-session reuse behavior, discarding interrupted sessions unless
   safe reuse is demonstrated;
-- document CDB-root/PDB principal placement, connection container,
-  `CONTAINER_DATA`, and expected row scope;
 - add sanitized CLI output and watch mode; and
-- add server-free parser, timeout-ordering, polling-cadence,
-  cancellation/session-state, multitenant-scope configuration, and
-  failure-classification tests.
+- add live cancellation/session-state, TLS, privilege, and row-scope tests.
 
 ### Stage 2: owned Free container fixture
 

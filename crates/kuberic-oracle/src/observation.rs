@@ -1,6 +1,6 @@
 use crate::{
-    ContractError, DatabaseId, DatabaseRole, DecimalScn, EditionProfile, LogMode, NativeName,
-    OpenMode, OracleObservation, OracleSupportConfig, ReplicationProfile,
+    ContractError, DatabaseId, DatabaseRole, DecimalScn, EditionProfile, ForceLogging, LogMode,
+    NativeName, OpenMode, OracleObservation, OracleSupportConfig, ReplicationProfile,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub struct ObservationTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Admission {
     pub role: DatabaseRole,
-    pub current_scn: DecimalScn,
+    pub current_scn: Option<DecimalScn>,
     pub resetlogs_change: DecimalScn,
     pub activation_number: u64,
 }
@@ -66,6 +66,9 @@ fn admit_standalone(database: &crate::DatabaseSnapshot) -> Result<(), ContractEr
     if database.open_mode != OpenMode::ReadWrite {
         return Err(ContractError::UnsupportedOpenMode);
     }
+    if database.current_scn.is_none() {
+        return Err(ContractError::CurrentScnRequired);
+    }
     Ok(())
 }
 
@@ -76,7 +79,7 @@ fn admit_data_guard(database: &crate::DatabaseSnapshot) -> Result<(), ContractEr
     if database.log_mode != LogMode::ArchiveLog {
         return Err(ContractError::ArchiveLogRequired);
     }
-    if !database.force_logging {
+    if database.force_logging != ForceLogging::Enabled {
         return Err(ContractError::ForceLoggingRequired);
     }
 
@@ -99,6 +102,9 @@ fn admit_data_guard(database: &crate::DatabaseSnapshot) -> Result<(), ContractEr
     }
     if !valid_open_mode {
         return Err(ContractError::UnsupportedOpenMode);
+    }
+    if database.open_mode != OpenMode::Mounted && database.current_scn.is_none() {
+        return Err(ContractError::CurrentScnRequired);
     }
 
     Ok(())

@@ -205,6 +205,13 @@ pub enum LogMode {
     NoArchiveLog,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForceLogging {
+    Enabled,
+    Disabled,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseSnapshot {
@@ -215,11 +222,11 @@ pub struct DatabaseSnapshot {
     pub edition: EditionProfile,
     pub role: DatabaseRole,
     pub open_mode: OpenMode,
-    pub current_scn: DecimalScn,
+    pub current_scn: Option<DecimalScn>,
     pub resetlogs_change: DecimalScn,
     pub activation_number: u64,
     pub log_mode: LogMode,
-    pub force_logging: bool,
+    pub force_logging: ForceLogging,
     pub is_container_database: bool,
 }
 
@@ -236,8 +243,18 @@ pub struct InstanceSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProductSnapshot {
+    pub product: String,
+    pub version: String,
+    pub version_full: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OracleObservation {
     pub observed_at_unix_millis: u64,
     pub database: DatabaseSnapshot,
     pub instance: InstanceSnapshot,
+    pub product: ProductSnapshot,
 }

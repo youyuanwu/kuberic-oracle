@@ -13,13 +13,18 @@ The current repository implements the first server-free foundation:
 - explicit standalone and Data Guard deployment profiles;
 - Oracle database, instance, initial lineage-evidence, role, open-mode, and SCN
   types;
+- validated credential/trust-file references, multitenant row scope, bounded
+  observer deadlines, and independent polling cadence;
+- driver-independent parsing of bracketed database, instance, and product rows,
+  including nullable `CURRENT_SCN` and exact supported logging values;
 - fail-closed observation admission for identity, freshness, edition, version,
   and the currently modeled role, logging, and open-mode subset; and
 - contract tests for Oracle Free and future Enterprise Data Guard profiles.
 
-It does **not** yet connect to Oracle, launch containers, publish Kuberic
-progress, configure Data Guard, or perform role changes. No live observer
-currently populates the snapshot contracts.
+It does **not** yet select an Oracle driver, connect to Oracle, read credential
+files, launch containers, publish Kuberic progress, configure Data Guard, or
+perform role changes. The parser currently consumes caller-provided raw rows;
+no live observer executes the query inventory.
 
 See the [support and safety design](docs/design.md) and
 [Kuberic progress analysis](docs/kuberic-progress.md).
@@ -77,8 +82,8 @@ accept license terms on behalf of an operator.
 
 ## Workspace layout
 
-- `crates/kuberic-oracle` contains production-safe contracts and observation
-  admission.
+- `crates/kuberic-oracle` contains production-safe configuration, raw-row
+  parsing, snapshot contracts, and observation admission.
 - `crates/kuberic-oracle-tests` contains cross-crate contract tests and is the
   future home of explicitly licensed live container fixtures.
 - `docs/design.md` defines deployment ownership, support boundaries, staged

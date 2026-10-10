@@ -1,7 +1,8 @@
 use kuberic_oracle::{
     ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
-    InstanceSnapshot, LogMode, NativeName, ObservationTarget, OpenMode, OracleObservation,
-    OracleSupportConfig, PinnedImage, ReplicationProfile, admit_observation,
+    ForceLogging, InstanceSnapshot, LogMode, NativeName, ObservationTarget, OpenMode,
+    OracleObservation, OracleSupportConfig, PinnedImage, ProductSnapshot, ReplicationProfile,
+    admit_observation,
 };
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -46,11 +47,11 @@ fn observation(
             edition,
             role,
             open_mode,
-            current_scn: DecimalScn::parse("123456789").unwrap(),
+            current_scn: Some(DecimalScn::parse("123456789").unwrap()),
             resetlogs_change: DecimalScn::parse("100").unwrap(),
             activation_number: 1,
             log_mode: LogMode::ArchiveLog,
-            force_logging: true,
+            force_logging: ForceLogging::Enabled,
             is_container_database: true,
         },
         instance: InstanceSnapshot {
@@ -60,6 +61,12 @@ fn observation(
             startup_time: "2026-10-10T00:00:00Z".to_owned(),
             status: "OPEN".to_owned(),
             database_status: "ACTIVE".to_owned(),
+        },
+        product: ProductSnapshot {
+            product: "Oracle Database Free".to_owned(),
+            version: "26.0.0.0.0".to_owned(),
+            version_full: "26.1.0.0.0".to_owned(),
+            status: "VALID".to_owned(),
         },
     }
 }
@@ -140,7 +147,7 @@ fn fresh_free_primary_observation_is_admitted() {
     .unwrap();
 
     assert_eq!(admission.role, DatabaseRole::Primary);
-    assert_eq!(admission.current_scn.value(), 123_456_789);
+    assert_eq!(admission.current_scn.unwrap().value(), 123_456_789);
 }
 
 #[test]

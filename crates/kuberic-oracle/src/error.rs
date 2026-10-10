@@ -13,8 +13,28 @@ pub enum ContractError {
     InvalidImageDigest,
     #[error("Oracle SCN must be a 1-38 digit unsigned decimal")]
     InvalidScn,
+    #[error("{field} must be an unsigned decimal integer")]
+    InvalidUnsignedInteger { field: &'static str },
     #[error("Oracle DBID must be nonzero")]
     InvalidDatabaseId,
+    #[error("unsupported Oracle value for {field}: {value}")]
+    UnsupportedNativeValue { field: &'static str, value: String },
+    #[error("Oracle product version is malformed")]
+    InvalidProductVersion,
+    #[error("database or instance identity changed during observation")]
+    ObservationIdentityChanged,
+    #[error("{field} duration must be nonzero")]
+    InvalidDuration { field: &'static str },
+    #[error("{field} duration must not exceed the whole-snapshot deadline")]
+    DurationExceedsSnapshot { field: &'static str },
+    #[error("{field} path must be absolute, normalized, UTF-8, and at most 4096 bytes")]
+    InvalidPath { field: &'static str },
+    #[error("username, password, and TLS trust material must use distinct files")]
+    ObserverFilesMustBeDistinct,
+    #[error("{field} expected row count must be nonzero")]
+    InvalidRowCount { field: &'static str },
+    #[error("principal placement and connection container are incompatible")]
+    InvalidContainerScope,
     #[error("Oracle Data Guard requires Enterprise Developer or Enterprise edition")]
     DataGuardRequiresEnterprise,
     #[error("unsupported replica count for {profile}: expected {expected}, observed {actual}")]
@@ -43,4 +63,6 @@ pub enum ContractError {
     ArchiveLogRequired,
     #[error("Data Guard admission requires FORCE LOGGING")]
     ForceLoggingRequired,
+    #[error("CURRENT_SCN is required for the observed role and open mode")]
+    CurrentScnRequired,
 }
