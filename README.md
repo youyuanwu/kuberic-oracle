@@ -9,15 +9,17 @@ own isolated database containers.
 
 The current repository implements the first server-free foundation:
 
-- digest-pinned Oracle container artifact validation;
+- digest-pinned image-reference syntax validation;
 - explicit standalone and Data Guard deployment profiles;
-- Oracle database, instance, lineage, role, open-mode, and SCN types;
+- Oracle database, instance, initial lineage-evidence, role, open-mode, and SCN
+  types;
 - fail-closed observation admission for identity, freshness, edition, version,
-  role, logging, and open-mode evidence; and
+  and the currently modeled role, logging, and open-mode subset; and
 - contract tests for Oracle Free and future Enterprise Data Guard profiles.
 
 It does **not** yet connect to Oracle, launch containers, publish Kuberic
-progress, configure Data Guard, or perform role changes.
+progress, configure Data Guard, or perform role changes. No live observer
+currently populates the snapshot contracts.
 
 See the [support and safety design](docs/design.md) and
 [Kuberic progress analysis](docs/kuberic-progress.md).
@@ -32,11 +34,15 @@ container-registry.oracle.com/database/free:<version>@sha256:<digest>
 
 The tag and digest above are placeholders. Tests and deployment configuration
 must use a reviewed version and immutable digest; `latest` alone is rejected.
+Stage 0 validates digest-reference syntax only. It does not yet require a tag
+or Oracle repository, resolve the registry object, inspect its manifest or
+platforms, establish provenance, or determine the terms governing the selected
+image. Those checks are mandatory before a live fixture uses the reference.
 
 Containers are required for the initial repository profile because:
 
-- the development host is Ubuntu while Oracle's native Free packages target
-  Oracle Linux RPM environments;
+- the development host is Ubuntu, outside the documented native RPM platforms
+  selected for this repository's initial evaluation;
 - Oracle Free permits only one installation per logical environment;
 - one container per test member provides filesystem, process, listener, and
   cleanup isolation; and
@@ -46,6 +52,13 @@ Containers are required for the initial repository profile because:
 Containers do not add Oracle Data Guard to Free edition. A Free container is
 therefore a standalone database member, not a physical standby.
 
+Oracle Free is an evaluation target, not a capacity or patching analogue for a
+production Enterprise deployment. Oracle documents limits including two
+foreground CPUs, 2 GB combined SGA/PGA memory, and 12 GB of user data, and
+states that Free does not receive support requests or patches, including
+security patches. See the
+[Oracle Database Free FAQ](https://www.oracle.com/database/free/faq/).
+
 ## Supported profiles
 
 | Profile | Edition | Replicas | Replication | Current status |
@@ -53,6 +66,9 @@ therefore a standalone database member, not a physical standby.
 | `standalone` | Oracle AI Database Free | 1 | None | Contract implemented |
 | `standalone` | Enterprise Developer/Enterprise | 1 | None | Contract implemented |
 | `data_guard_physical` | Enterprise Developer/Enterprise | 3 | Oracle Data Guard | Contract only |
+
+The three-member Data Guard count is this repository's supported laboratory
+invariant, not an Oracle Data Guard product minimum.
 
 Enterprise Developer is suitable only where the applicable Oracle license
 permits development, testing, prototyping, and demonstration. Production use
@@ -98,8 +114,8 @@ It will:
 1. create an isolated network, volume, container, and credential files;
 2. wait for the listener and database to become ready;
 3. create a least-privileged observation principal;
-4. validate identity, role, open mode, SCN, restart incarnation, TLS, and CLI
-   behavior;
+4. validate identity, role, open mode, SCN, startup-time restart evidence,
+   future explicit incarnation/resource bindings, TLS, and CLI behavior;
 5. journal immutable resource identities before exposing them to tests; and
 6. remove only resources whose current identities match the journal.
 
