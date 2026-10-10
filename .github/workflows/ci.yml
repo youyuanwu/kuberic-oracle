@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kuberic-oracle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validation:
+    name: Server-free validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          components: rustfmt, clippy
+          build-warnings: ""
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run strict Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Run tests
+        run: cargo test --locked --workspace --all-features
