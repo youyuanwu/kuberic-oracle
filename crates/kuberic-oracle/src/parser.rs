@@ -90,6 +90,7 @@ pub fn parse_observation_rows(
     if parse_major_version(&instance.version_full)? != product.native_major_version {
         return Err(ContractError::InvalidProductVersion);
     }
+    validate_product_edition(&product.product, instance.native_edition)?;
 
     Ok(OracleObservation {
         observed_at_unix_millis,
@@ -220,6 +221,20 @@ fn parse_native_edition(value: &str) -> Result<NativeEdition, ContractError> {
         "EE" => Ok(NativeEdition::Enterprise),
         _ => Err(unsupported("edition", value)),
     }
+}
+
+fn validate_product_edition(
+    product: &str,
+    native_edition: NativeEdition,
+) -> Result<(), ContractError> {
+    let matches = match native_edition {
+        NativeEdition::Free => product.ends_with(" Free"),
+        NativeEdition::Enterprise => product.ends_with(" Enterprise Edition"),
+    };
+    if !matches {
+        return Err(unsupported("product_edition", product));
+    }
+    Ok(())
 }
 
 fn parse_open_mode(value: &str) -> Result<OpenMode, ContractError> {

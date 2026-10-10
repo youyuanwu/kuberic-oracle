@@ -291,6 +291,20 @@ fn configured_and_live_editions_must_match() {
 }
 
 #[test]
+fn product_and_live_editions_must_match() {
+    let mut raw = rows();
+    raw.product.product = "Oracle AI Database 26ai Enterprise Edition".to_owned();
+
+    assert_eq!(
+        parse_observation_rows(raw, 9_900),
+        Err(ContractError::UnsupportedNativeValue {
+            field: "product_edition",
+            value: "Oracle AI Database 26ai Enterprise Edition".to_owned(),
+        })
+    );
+}
+
+#[test]
 fn observer_configuration_accepts_independent_polling_cadence() {
     OracleObserverConfig {
         support: support(EditionProfile::Free, ReplicationProfile::Standalone),
