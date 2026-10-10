@@ -6,16 +6,17 @@ This document defines the current boundary between Oracle native progress and
 Kuberic's fixed Service Fabric-compatible replication contract.
 
 The repository does not currently publish Oracle progress to Kuberic. It
-defines a Stage 0 snapshot contract that can carry exact native values supplied
-by a caller, so that a future integration can be evaluated without prematurely
-treating one Oracle number as complete replication or promotion authority.
+defines a snapshot contract and server-free raw-row parser that can carry exact
+native values supplied by a caller, so that a future integration can be
+evaluated without prematurely treating one Oracle number as complete
+replication or promotion authority.
 
 ## Standalone Free profile
 
 Oracle AI Database Free is initially supported as one standalone `PRIMARY`
 database opened `READ WRITE`.
 
-The Stage 0 snapshot contract has fields for:
+The snapshot contract has fields for:
 
 - `CURRENT_SCN`;
 - `RESETLOGS_CHANGE#`;
@@ -27,11 +28,13 @@ The Stage 0 snapshot contract has fields for:
 - instance startup time; and
 - Oracle product version and edition.
 
-No live observer currently populates these fields. Product/version provenance
-remains unproven until the live product query is parsed and retained. Edition
-provenance remains unproven until a documented live edition source is
-independently derived and both sources are cross-checked against the configured
-image and support profile.
+The server-free parser accepts caller-provided rows corresponding to the fixed
+database, instance, product, and identity queries. It preserves a `NULL`
+`CURRENT_SCN` for a mounted standby and rejects bracket identity changes and
+unmodeled native logging values. No live observer currently executes those
+queries. Product/version provenance therefore remains unproven until Oracle
+supplies the parsed rows, and edition remains provisional configured input
+until a documented live source is independently derived and cross-checked.
 
 When supplied from a trusted future observer, these fields can support
 identity, freshness, startup-time restart evidence, and health validation. They
