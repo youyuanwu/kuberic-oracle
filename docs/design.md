@@ -425,8 +425,8 @@ Implemented for the local PoC:
   audit;
 - positive, authentication, authorization, process-signal, row-scope, and
   cleanup cases; and
-- an ordinary authorization-gated Rust test enabled by the default CI
-  validation job.
+- an ordinary Rust test enabled by repository Cargo configuration and the
+  default local/CI validation path.
 
 Still deferred:
 

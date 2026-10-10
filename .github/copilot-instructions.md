@@ -8,9 +8,9 @@ in an externally provisioned, digest-pinned container. Do not add database
 deployment, Data Guard mutation, promotion, switchover, or license-acceptance
 behavior to production code without an explicit design and safety review.
 
-Run `just check` for routine changes. The live Oracle PoC is an ordinary,
-authorization-gated Rust test; GitHub Actions enables it in the default
-validation job. It is Linux x86-64/test-only and may use plaintext only through
-its owned loopback fixture. Production must not expose plaintext. Live cleanup
-may remove only resources recorded and revalidated through the exact ownership
-journal.
+Run `just check` for routine changes; repository Cargo configuration enables
+the live Oracle PoC in the default Rust test set and CI validation job. Use
+`just check-server-free` only when Docker execution is intentionally excluded.
+The PoC is Linux x86-64/test-only and may use plaintext only through its owned
+loopback fixture. Production must not expose plaintext. Live cleanup may remove
+only resources recorded and revalidated through the exact ownership journal.

@@ -7,7 +7,7 @@ safety boundary established by
 observes an already provisioned database, while test-only infrastructure may
 own isolated database containers.
 
-The current repository implements the server-free contracts plus an opt-in
+The current repository implements the server-free contracts plus a default
 test-only live proof:
 
 - digest-pinned image-reference syntax validation;
@@ -101,7 +101,7 @@ Dependency versions are declared in the root `Cargo.toml`.
 
 ## Development
 
-Run all server-free checks:
+Run all checks, including the Oracle Free live proof:
 
 ```bash
 just check
@@ -115,12 +115,14 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 ```
 
-No Oracle installation or container runtime is needed for these checks.
+Repository Cargo configuration sets
+`KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES`, so default Cargo tests require Linux
+x86-64, Docker, `strace`, and sufficient image storage. Run
+`just check-server-free` when only the non-container contracts should execute.
 
-Run the opt-in live proof only after accepting the applicable Oracle terms:
+Run only the live proof:
 
 ```bash
-KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES \
 KUBERIC_ORACLE_DOCKER_HOST=unix:///path/to/docker.sock \
 just live
 ```
@@ -129,10 +131,9 @@ If a test process is interrupted after the ownership journal is written, use
 the same environment and run `just live-cleanup`. Cleanup loads the retained
 journal, revalidates immutable identities, and refuses foreign replacements.
 
-GitHub Actions enables the authorization-gated Rust test in its default
-validation job on every pull request and push to `main`. Local `cargo test` and
-`just check` leave the live body disabled unless
-`KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES` is set.
+GitHub Actions and local `cargo test` execute the same default Rust test set,
+including the live proof. Setting
+`KUBERIC_ORACLE_ACCEPT_FREE_TERMS=NO` disables only the live body.
 
 The live proof requires Linux x86-64, Docker, `strace`, sufficient image
 storage, the pinned Linux image digest, and one local `FREEPDB1` observer. It

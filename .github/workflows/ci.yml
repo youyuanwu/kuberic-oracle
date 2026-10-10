@@ -21,7 +21,6 @@ jobs:
     timeout-minutes: 35
     env:
       CARGO_BUILD_JOBS: "1"
-      KUBERIC_ORACLE_ACCEPT_FREE_TERMS: "YES"
       KUBERIC_ORACLE_DOCKER_HOST: unix:///var/run/docker.sock
       KUBERIC_ORACLE_FIXTURE_ROOT: ${{ runner.temp }}/kuberic-oracle-poc
     steps:
