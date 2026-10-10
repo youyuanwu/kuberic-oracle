@@ -6,9 +6,9 @@ pub const IMAGE: &str = "container-registry.oracle.com/database/free@sha256:c4d9
 
 #[derive(Debug, Clone)]
 pub struct FixtureConfig {
-    pub docker_host: String,
-    pub root: PathBuf,
-    pub startup_timeout_seconds: u64,
+    pub(crate) docker_host: String,
+    pub(crate) root: PathBuf,
+    pub(crate) startup_timeout_seconds: u64,
 }
 
 impl FixtureConfig {

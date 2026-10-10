@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     fs::OpenOptions,
     io::Write,
     os::unix::fs::OpenOptionsExt,
@@ -9,6 +10,7 @@ use std::{
 };
 
 use crate::poc::{PocCategory, PocEndpoint, PocFailure, PocStage};
+use zeroize::Zeroizing;
 
 use super::{
     config::{FixtureConfig, IMAGE},
@@ -29,6 +31,7 @@ pub struct OracleFixture {
     credentials: Option<FixtureCredentials>,
     database_id: u64,
     database_unique_name: String,
+    trace_identity: Cell<Option<FileIdentity>>,
 }
 
 impl OracleFixture {
@@ -50,6 +53,7 @@ impl OracleFixture {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            trace_identity: Cell::new(None),
         };
         if let Err(operation) = fixture.start_inner() {
             let cleanup = fixture.cleanup_inner().err();
@@ -100,6 +104,8 @@ impl OracleFixture {
     }
 
     pub fn verify_loopback_trace(&self, path: &Path) -> Result<FileIdentity, PocFailure> {
+        let identity = FileIdentity::from_path(path)?;
+        self.trace_identity.set(Some(identity));
         let contents = std::fs::read_to_string(path)
             .map_err(|_| fixture_failure("worker connection trace is unavailable"))?;
         let mut connect_count = 0usize;
@@ -119,7 +125,12 @@ impl OracleFixture {
                 "worker connection trace contained no network connection",
             ));
         }
-        FileIdentity::from_path(path)
+        if !identity.matches_path(path) {
+            return Err(fixture_failure(
+                "worker connection trace changed during verification",
+            ));
+        }
+        Ok(identity)
     }
 
     pub fn remove_connection_trace(&self, path: &Path) -> Result<(), PocFailure> {
@@ -128,10 +139,14 @@ impl OracleFixture {
                 "worker trace path escaped the fixture root",
             ));
         }
-        match FileIdentity::from_path(path) {
-            Ok(identity) => self.remove_owned_file(path, identity),
-            Err(_) if !path.exists() => Ok(()),
-            Err(_) => Err(cleanup_failure("worker trace identity is invalid")),
+        match self.trace_identity.get() {
+            Some(identity) => {
+                self.remove_owned_file(path, identity)?;
+                self.trace_identity.set(None);
+                Ok(())
+            }
+            None if !path.exists() => Ok(()),
+            None => Err(cleanup_failure("worker trace identity was not recorded")),
         }
     }
 
@@ -167,13 +182,18 @@ impl OracleFixture {
             &format!(
                 "SELECT \
                  (SELECT COUNT(*) FROM DBA_ROLE_PRIVS WHERE GRANTEE='{OBSERVER}') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='CREATE SESSION' AND ADMIN_OPTION='NO') || ':' || \
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE <> 'CREATE SESSION') || ':' || \
-                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE'))) || ':' || \
-                 (SELECT COUNT(*) FROM V$PWFILE_USERS WHERE USERNAME='{OBSERVER}') \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO')) || ':' || \
+                 (SELECT COUNT(*) FROM V$PWFILE_USERS WHERE USERNAME='{OBSERVER}') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND OWNER='SYS' AND TABLE_NAME='PRODUCT_COMPONENT_VERSION' AND PRIVILEGE='READ') \
                  FROM DUAL"
             ),
         )?;
-        if result != "0:0:0:0" {
+        if result != "0:1:1:0:2:2:0:0:1" {
             return Err(fixture_failure(
                 "observer effective privileges exceed the PoC profile",
             ));
@@ -203,6 +223,8 @@ impl OracleFixture {
         self.credentials = Some(credentials);
         self.persist_journal()?;
 
+        self.journal.network_expected = true;
+        self.persist_journal()?;
         self.journal.network_id = self.docker(&[
             "network",
             "create",
@@ -212,6 +234,8 @@ impl OracleFixture {
         ])?;
         self.persist_journal()?;
 
+        self.journal.volume_expected = true;
+        self.persist_journal()?;
         self.docker(&[
             "volume",
             "create",
@@ -219,11 +243,24 @@ impl OracleFixture {
             &format!("kuberic.oracle.owner={}", self.journal.token),
             VOLUME_NAME,
         ])?;
-        self.journal.volume_driver =
-            self.docker(&["volume", "inspect", VOLUME_NAME, "--format", "{{.Driver}}"])?;
+        self.journal.volume_identity = self.docker(&[
+            "volume",
+            "inspect",
+            VOLUME_NAME,
+            "--format",
+            "{{.CreatedAt}}|{{.Mountpoint}}|{{.Driver}}",
+        ])?;
         self.persist_journal()?;
 
-        let credentials = self.credentials.as_ref().unwrap();
+        let admin_env_file = self
+            .credentials
+            .as_ref()
+            .unwrap()
+            .admin_env_file
+            .to_string_lossy()
+            .into_owned();
+        self.journal.container_expected = true;
+        self.persist_journal()?;
         self.journal.container_id = self.docker(&[
             "run",
             "-d",
@@ -238,7 +275,7 @@ impl OracleFixture {
             "--publish",
             "127.0.0.1::1521",
             "--env-file",
-            credentials.admin_env_file.to_str().unwrap(),
+            &admin_env_file,
             IMAGE,
         ])?;
         self.persist_journal()?;
@@ -350,7 +387,7 @@ impl OracleFixture {
 
     fn provision_observer(&self) -> Result<(), PocFailure> {
         let credentials = self.credentials.as_ref().unwrap();
-        self.execute_sql(&format!(
+        let statements = Zeroizing::new(format!(
             "ALTER SESSION SET CONTAINER=FREEPDB1;\n\
              CREATE USER {} IDENTIFIED BY \"{}\";\n\
              GRANT CREATE SESSION TO {};\n\
@@ -361,13 +398,14 @@ impl OracleFixture {
             credentials.username,
             credentials.username,
             credentials.username,
-        ))
+        ));
+        self.execute_sql(&statements)
     }
 
     fn execute_sql(&self, statements: &str) -> Result<(), PocFailure> {
-        let script = format!(
+        let script = Zeroizing::new(format!(
             "WHENEVER SQLERROR EXIT SQL.SQLCODE\nSET ECHO OFF FEEDBACK OFF HEADING OFF\n{statements}\nEXIT\n"
-        );
+        ));
         let output = self.docker_with_input(
             &[
                 "exec",
@@ -384,6 +422,7 @@ impl OracleFixture {
                 "Oracle fixture SQL returned unexpected output",
             ));
         }
+
         Ok(())
     }
 
@@ -421,40 +460,59 @@ impl OracleFixture {
     fn cleanup_inner(&mut self) -> Result<(), PocFailure> {
         let mut failure: Option<PocFailure> = None;
         let trace_path = self.connection_trace_path();
-        if trace_path.exists()
-            && let Err(trace_failure) = self.remove_connection_trace(&trace_path)
-        {
-            failure = Some(trace_failure);
+        if trace_path.exists() {
+            if let Err(trace_failure) = self.remove_connection_trace(&trace_path) {
+                failure = Some(trace_failure);
+            }
+        } else {
+            self.trace_identity.set(None);
         }
-        if !self.journal.container_id.is_empty() {
-            match self.verify_container_identity() {
-                Ok(()) => {
-                    if self.docker(&["rm", "-f", CONTAINER_NAME]).is_err() {
-                        failure = Some(cleanup_failure("owned container could not be removed"));
+        if self.journal.container_expected {
+            match self.docker_exists("container", CONTAINER_NAME) {
+                Ok(true) => match self.verify_container_identity() {
+                    Ok(()) => {
+                        if self.docker(&["rm", "-f", CONTAINER_NAME]).is_err() {
+                            failure = Some(cleanup_failure("owned container could not be removed"));
+                        }
                     }
-                }
-                Err(identity) => failure = Some(identity),
+                    Err(identity) => failure = Some(identity),
+                },
+                Ok(false) => {}
+                Err(inspect) => failure = Some(inspect),
             }
         }
-        if !self.journal.network_id.is_empty() {
-            match self.verify_network_identity() {
-                Ok(()) => {
-                    if self.docker(&["network", "rm", NETWORK_NAME]).is_err() && failure.is_none() {
-                        failure = Some(cleanup_failure("owned network could not be removed"));
+        if self.journal.network_expected {
+            match self.docker_exists("network", NETWORK_NAME) {
+                Ok(true) => match self.verify_network_identity() {
+                    Ok(()) => {
+                        if self.docker(&["network", "rm", NETWORK_NAME]).is_err()
+                            && failure.is_none()
+                        {
+                            failure = Some(cleanup_failure("owned network could not be removed"));
+                        }
                     }
-                }
-                Err(identity) if failure.is_none() => failure = Some(identity),
+                    Err(identity) if failure.is_none() => failure = Some(identity),
+                    Err(_) => {}
+                },
+                Ok(false) => {}
+                Err(inspect) if failure.is_none() => failure = Some(inspect),
                 Err(_) => {}
             }
         }
-        if !self.journal.volume_driver.is_empty() {
-            match self.verify_volume_identity() {
-                Ok(()) => {
-                    if self.docker(&["volume", "rm", VOLUME_NAME]).is_err() && failure.is_none() {
-                        failure = Some(cleanup_failure("owned volume could not be removed"));
+        if self.journal.volume_expected {
+            match self.docker_exists("volume", VOLUME_NAME) {
+                Ok(true) => match self.verify_volume_identity() {
+                    Ok(()) => {
+                        if self.docker(&["volume", "rm", VOLUME_NAME]).is_err() && failure.is_none()
+                        {
+                            failure = Some(cleanup_failure("owned volume could not be removed"));
+                        }
                     }
-                }
-                Err(identity) if failure.is_none() => failure = Some(identity),
+                    Err(identity) if failure.is_none() => failure = Some(identity),
+                    Err(_) => {}
+                },
+                Ok(false) => {}
+                Err(inspect) if failure.is_none() => failure = Some(inspect),
                 Err(_) => {}
             }
         }
@@ -503,7 +561,7 @@ impl OracleFixture {
 
     fn verify_container_identity(&self) -> Result<(), PocFailure> {
         let current = self.docker(&["inspect", CONTAINER_NAME, "--format", "{{.Id}}"])?;
-        if current != self.journal.container_id {
+        if !self.journal.container_id.is_empty() && current != self.journal.container_id {
             return Err(cleanup_failure("owned container identity changed"));
         }
         let label = self.docker(&[
@@ -515,21 +573,40 @@ impl OracleFixture {
         if label != self.journal.token {
             return Err(cleanup_failure("owned container ownership changed"));
         }
+        let image = self.docker(&["inspect", CONTAINER_NAME, "--format", "{{.Config.Image}}"])?;
+        if image != self.journal.image {
+            return Err(cleanup_failure("owned container image changed"));
+        }
         Ok(())
     }
 
     fn verify_network_identity(&self) -> Result<(), PocFailure> {
         let current = self.docker(&["network", "inspect", NETWORK_NAME, "--format", "{{.Id}}"])?;
-        if current != self.journal.network_id {
+        if !self.journal.network_id.is_empty() && current != self.journal.network_id {
             return Err(cleanup_failure("owned network identity changed"));
+        }
+        let label = self.docker(&[
+            "network",
+            "inspect",
+            NETWORK_NAME,
+            "--format",
+            "{{index .Labels \"kuberic.oracle.owner\"}}",
+        ])?;
+        if label != self.journal.token {
+            return Err(cleanup_failure("owned network ownership changed"));
         }
         Ok(())
     }
 
     fn verify_volume_identity(&self) -> Result<(), PocFailure> {
-        let current =
-            self.docker(&["volume", "inspect", VOLUME_NAME, "--format", "{{.Driver}}"])?;
-        if current != self.journal.volume_driver {
+        let current = self.docker(&[
+            "volume",
+            "inspect",
+            VOLUME_NAME,
+            "--format",
+            "{{.CreatedAt}}|{{.Mountpoint}}|{{.Driver}}",
+        ])?;
+        if !self.journal.volume_identity.is_empty() && current != self.journal.volume_identity {
             return Err(cleanup_failure("owned volume identity changed"));
         }
         let label = self.docker(&[
@@ -598,6 +675,14 @@ impl OracleFixture {
         }
         String::from_utf8(output.stdout)
             .map_err(|_| fixture_failure("Oracle fixture SQL output was invalid"))
+    }
+}
+
+impl Drop for OracleFixture {
+    fn drop(&mut self) {
+        if self.owner.is_some() {
+            let _ = self.cleanup_inner();
+        }
     }
 }
 
