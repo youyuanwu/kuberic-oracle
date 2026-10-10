@@ -22,7 +22,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "1"
       KUBERIC_ORACLE_DOCKER_HOST: unix:///var/run/docker.sock
-      KUBERIC_ORACLE_FIXTURE_ROOT: ${{ runner.temp }}/kuberic-oracle-poc
+      KUBERIC_ORACLE_FIXTURE_ROOT: /tmp/kuberic-oracle-poc
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
