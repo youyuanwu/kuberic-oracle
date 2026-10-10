@@ -31,6 +31,7 @@ SELECT
     i.instance_name AS instance_name,
     i.host_name AS host_name,
     i.version_full AS version_full,
+    i.edition AS edition,
     i.startup_time AS startup_time,
     i.status AS status,
     i.database_status AS database_status
@@ -42,7 +43,7 @@ SELECT
     p.product AS product,
     p.version AS version,
     p.version_full AS version_full,
-    p.status AS status
+    p.status AS release_status
 FROM product_component_version p
-WHERE p.product LIKE 'Oracle Database%'
+WHERE p.product LIKE 'Oracle AI Database%'
 "#;

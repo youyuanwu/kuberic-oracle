@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
-    ForceLogging, InstanceSnapshot, LogMode, NativeName, OpenMode, OracleObservation,
+    ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging,
+    InstanceSnapshot, LogMode, NativeEdition, NativeName, OpenMode, OracleObservation,
     ProductSnapshot,
 };
 
@@ -39,6 +39,7 @@ pub struct RawInstanceRow {
     pub instance_name: String,
     pub host_name: String,
     pub version_full: String,
+    pub edition: String,
     pub startup_time: String,
     pub status: String,
     pub database_status: String,
@@ -50,7 +51,7 @@ pub struct RawProductRow {
     pub product: String,
     pub version: String,
     pub version_full: String,
-    pub status: String,
+    pub release_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +66,6 @@ pub struct RawObservationRows {
 
 pub fn parse_observation_rows(
     rows: RawObservationRows,
-    configured_edition: EditionProfile,
     observed_at_unix_millis: u64,
 ) -> Result<OracleObservation, ContractError> {
     let before = parse_identity(rows.before)?;
@@ -76,8 +76,7 @@ pub fn parse_observation_rows(
     }
 
     let product = parse_product(rows.product)?;
-    let product_major_version = parse_major_version(&product.version_full)?;
-    let database = parse_database(rows.database, configured_edition, product_major_version)?;
+    let database = parse_database(rows.database)?;
     let instance = parse_instance(rows.instance)?;
 
     if database.database_id != before.database_id
@@ -88,7 +87,7 @@ pub fn parse_observation_rows(
         return Err(ContractError::ObservationIdentityChanged);
     }
 
-    if parse_major_version(&instance.version_full)? != product_major_version {
+    if parse_major_version(&instance.version_full)? != product.native_major_version {
         return Err(ContractError::InvalidProductVersion);
     }
 
@@ -117,17 +116,11 @@ fn parse_identity(row: RawObservationIdentity) -> Result<ParsedIdentity, Contrac
     })
 }
 
-fn parse_database(
-    row: RawDatabaseRow,
-    configured_edition: EditionProfile,
-    product_major_version: u16,
-) -> Result<DatabaseSnapshot, ContractError> {
+fn parse_database(row: RawDatabaseRow) -> Result<DatabaseSnapshot, ContractError> {
     Ok(DatabaseSnapshot {
         database_id: parse_database_id(&row.database_id)?,
         database_name: NativeName::new("database_name", row.database_name)?,
         database_unique_name: NativeName::new("database_unique_name", row.database_unique_name)?,
-        product_major_version,
-        edition: configured_edition,
         role: parse_database_role(&row.database_role)?,
         open_mode: parse_open_mode(&row.open_mode)?,
         current_scn: row
@@ -148,6 +141,7 @@ fn parse_instance(row: RawInstanceRow) -> Result<InstanceSnapshot, ContractError
         instance_name: NativeName::new("instance_name", row.instance_name)?,
         host_name: NativeName::new("host_name", row.host_name)?,
         version_full: parse_text("instance_version_full", row.version_full)?,
+        native_edition: parse_native_edition(&row.edition)?,
         startup_time: parse_text("startup_time", row.startup_time)?,
         status: parse_text("instance_status", row.status)?,
         database_status: parse_text("database_status", row.database_status)?,
@@ -155,22 +149,24 @@ fn parse_instance(row: RawInstanceRow) -> Result<InstanceSnapshot, ContractError
 }
 
 fn parse_product(row: RawProductRow) -> Result<ProductSnapshot, ContractError> {
-    let product = ProductSnapshot {
-        product: parse_text("product", row.product)?,
-        version: parse_text("product_version", row.version)?,
-        version_full: parse_text("product_version_full", row.version_full)?,
-        status: parse_text("product_status", row.status)?,
-    };
-    if !product.product.starts_with("Oracle Database") {
-        return Err(unsupported("product", &product.product));
+    let product = parse_text("product", row.product)?;
+    if !product.starts_with("Oracle AI Database") {
+        return Err(unsupported("product", &product));
     }
-    if product.status != "VALID" {
-        return Err(unsupported("product_status", &product.status));
-    }
-    if parse_major_version(&product.version)? != parse_major_version(&product.version_full)? {
+    let version = parse_text("product_version", row.version)?;
+    let version_full = parse_text("product_version_full", row.version_full)?;
+    let release_status = parse_text("product_release_status", row.release_status)?;
+    let native_major_version = parse_major_version(&version_full)?;
+    if parse_major_version(&version)? != native_major_version {
         return Err(ContractError::InvalidProductVersion);
     }
-    Ok(product)
+    Ok(ProductSnapshot {
+        product,
+        version,
+        version_full,
+        native_major_version,
+        release_status,
+    })
 }
 
 fn parse_database_id(value: &str) -> Result<DatabaseId, ContractError> {
@@ -215,6 +211,14 @@ fn parse_database_role(value: &str) -> Result<DatabaseRole, ContractError> {
         "SNAPSHOT STANDBY" => Ok(DatabaseRole::SnapshotStandby),
         "FAR SYNC" => Ok(DatabaseRole::FarSync),
         _ => Err(unsupported("database_role", value)),
+    }
+}
+
+fn parse_native_edition(value: &str) -> Result<NativeEdition, ContractError> {
+    match value {
+        "FREE" => Ok(NativeEdition::Free),
+        "EE" => Ok(NativeEdition::Enterprise),
+        _ => Err(unsupported("edition", value)),
     }
 }
 

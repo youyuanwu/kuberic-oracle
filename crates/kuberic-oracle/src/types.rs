@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ContractError, EditionProfile};
+use crate::ContractError;
 
 const MAX_NATIVE_NAME_BYTES: usize = 128;
 const MAX_SCN_DIGITS: usize = 38;
@@ -212,14 +212,19 @@ pub enum ForceLogging {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeEdition {
+    Free,
+    Enterprise,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseSnapshot {
     pub database_id: DatabaseId,
     pub database_name: NativeName,
     pub database_unique_name: NativeName,
-    pub product_major_version: u16,
-    pub edition: EditionProfile,
     pub role: DatabaseRole,
     pub open_mode: OpenMode,
     pub current_scn: Option<DecimalScn>,
@@ -236,6 +241,7 @@ pub struct InstanceSnapshot {
     pub instance_name: NativeName,
     pub host_name: NativeName,
     pub version_full: String,
+    pub native_edition: NativeEdition,
     pub startup_time: String,
     pub status: String,
     pub database_status: String,
@@ -247,7 +253,8 @@ pub struct ProductSnapshot {
     pub product: String,
     pub version: String,
     pub version_full: String,
-    pub status: String,
+    pub native_major_version: u16,
+    pub release_status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,15 +1,15 @@
 use kuberic_oracle::{
     ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
-    ForceLogging, InstanceSnapshot, LogMode, NativeName, ObservationTarget, OpenMode,
-    OracleObservation, OracleSupportConfig, PinnedImage, ProductSnapshot, ReplicationProfile,
-    admit_observation,
+    ForceLogging, InstanceSnapshot, LogMode, NativeEdition, NativeName, ObservationTarget,
+    OpenMode, OracleObservation, OracleSupportConfig, PinnedImage, ProductSnapshot,
+    ReplicationProfile, admit_observation,
 };
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn image() -> PinnedImage {
     PinnedImage::parse(format!(
-        "container-registry.oracle.com/database/free:26.0.0@sha256:{DIGEST}"
+        "container-registry.oracle.com/database/free:23.26.3.0@sha256:{DIGEST}"
     ))
     .unwrap()
 }
@@ -23,7 +23,7 @@ fn config(
         edition,
         replication,
         replica_count,
-        expected_major_version: 26,
+        expected_native_major_version: 23,
         image: image(),
     }
 }
@@ -43,8 +43,6 @@ fn observation(
             database_id: DatabaseId::new(42).unwrap(),
             database_name: name("FREE"),
             database_unique_name: name("FREE"),
-            product_major_version: 26,
-            edition,
             role,
             open_mode,
             current_scn: Some(DecimalScn::parse("123456789").unwrap()),
@@ -57,16 +55,28 @@ fn observation(
         instance: InstanceSnapshot {
             instance_name: name("FREE"),
             host_name: name("oracle-free-1"),
-            version_full: "26.1.0.0.0".to_owned(),
+            version_full: "23.26.3.0.0".to_owned(),
+            native_edition: match edition {
+                EditionProfile::Free => NativeEdition::Free,
+                EditionProfile::EnterpriseDeveloper | EditionProfile::Enterprise => {
+                    NativeEdition::Enterprise
+                }
+            },
             startup_time: "2026-10-10T00:00:00Z".to_owned(),
             status: "OPEN".to_owned(),
             database_status: "ACTIVE".to_owned(),
         },
         product: ProductSnapshot {
-            product: "Oracle Database Free".to_owned(),
-            version: "26.0.0.0.0".to_owned(),
-            version_full: "26.1.0.0.0".to_owned(),
-            status: "VALID".to_owned(),
+            product: match edition {
+                EditionProfile::Free => "Oracle AI Database 26ai Free".to_owned(),
+                EditionProfile::EnterpriseDeveloper | EditionProfile::Enterprise => {
+                    "Oracle AI Database 26ai Enterprise Edition".to_owned()
+                }
+            },
+            version: "23.26.0.0.0".to_owned(),
+            version_full: "23.26.3.0.0".to_owned(),
+            native_major_version: 23,
+            release_status: "Develop, Learn, and Run for Free".to_owned(),
         },
     }
 }

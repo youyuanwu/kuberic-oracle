@@ -18,5 +18,5 @@ pub use parser::{
 };
 pub use types::{
     DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging, InstanceSnapshot,
-    LogMode, NativeName, OpenMode, OracleObservation, PinnedImage, ProductSnapshot,
+    LogMode, NativeEdition, NativeName, OpenMode, OracleObservation, PinnedImage, ProductSnapshot,
 };
