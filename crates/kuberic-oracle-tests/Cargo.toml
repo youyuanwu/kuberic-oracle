@@ -10,4 +10,12 @@ publish.workspace = true
 
 [dependencies]
 kuberic-oracle.workspace = true
+libc.workspace = true
+oracledb.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
