@@ -123,17 +123,21 @@ impl OwnerClaim {
                 .map_err(|_| fixture_failure("fixture owner token could not be created"))?
                 .as_nanos()
         );
+        let root_identity = DirectoryIdentity::from_path(root)?;
+        let lock_record = format!(
+            "{}|{}|{}|{}",
+            token, root_identity.device, root_identity.inode, root_identity.uid
+        );
         let mut lock = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&lock_path)
             .map_err(|_| fixture_failure("another Oracle fixture owner is active"))?;
-        lock.write_all(token.as_bytes())
+        lock.write_all(lock_record.as_bytes())
             .and_then(|()| lock.sync_all())
             .map_err(|_| fixture_failure("fixture owner claim could not be persisted"))?;
         let lock_identity = FileIdentity::from_path(&lock_path)?;
-        let root_identity = DirectoryIdentity::from_path(root)?;
         Ok(Self {
             root: root.to_path_buf(),
             root_identity,
@@ -174,15 +178,37 @@ impl OwnerClaim {
         std::fs::File::open(&lock_path)
             .and_then(|file| file.take(1024).read_to_string(&mut token))
             .map_err(|_| cleanup_failure("fixture owner claim could not be read"))?;
+        let mut fields = token.split('|');
+        let token = fields.next().unwrap_or_default();
+        let recorded_root = DirectoryIdentity {
+            device: fields
+                .next()
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| cleanup_failure("fixture owner claim is invalid"))?,
+            inode: fields
+                .next()
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| cleanup_failure("fixture owner claim is invalid"))?,
+            uid: fields
+                .next()
+                .and_then(|value| value.parse().ok())
+                .ok_or_else(|| cleanup_failure("fixture owner claim is invalid"))?,
+        };
+        if fields.next().is_some() {
+            return Err(cleanup_failure("fixture owner claim is invalid"));
+        }
         if token != expected_token {
             return Err(cleanup_failure("fixture owner claim token changed"));
+        }
+        if root_identity != recorded_root {
+            return Err(cleanup_failure("fixture root identity changed"));
         }
         Ok(Self {
             root: root.to_path_buf(),
             root_identity,
             lock_path,
             lock_identity,
-            token,
+            token: token.to_owned(),
         })
     }
 

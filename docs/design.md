@@ -213,6 +213,9 @@ journal.
 Journal publication synchronizes both file content and the containing
 directory; a complete owner-matching temporary publication is recovered,
 while malformed or conflicting temporary state fails closed.
+Timed-out Docker creation remains explicitly ambiguous: automatic cleanup
+retains the journal rather than treating short-term absence as proof that the
+daemon canceled the mutation.
 
 ## Observation contract
 

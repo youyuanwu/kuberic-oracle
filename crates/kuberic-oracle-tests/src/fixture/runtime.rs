@@ -67,7 +67,6 @@ pub struct OracleFixture {
     database_incarnation: Option<DatabaseIncarnationIdentity>,
     trace_identity: Cell<Option<FileIdentity>>,
     operation_deadline: Cell<Option<Instant>>,
-    recovery_mode: bool,
     #[cfg(test)]
     lifecycle_failpoint: Cell<Option<LifecycleFailpoint>>,
     cleanup_attempted: bool,
@@ -125,7 +124,6 @@ impl OracleFixture {
             database_incarnation: None,
             trace_identity: Cell::new(None),
             operation_deadline: Cell::new(Some(operation_deadline)),
-            recovery_mode: false,
             #[cfg(test)]
             lifecycle_failpoint: Cell::new(None),
             cleanup_attempted: false,
@@ -180,12 +178,19 @@ impl OracleFixture {
             database_incarnation: None,
             trace_identity: Cell::new(None),
             operation_deadline: Cell::new(Some(cleanup_deadline)),
-            recovery_mode: true,
             #[cfg(test)]
             lifecycle_failpoint: Cell::new(None),
             cleanup_attempted: true,
         };
-        if !fixture.journal.docker_daemon_id.is_empty() {
+        if fixture.journal.docker_daemon_id.is_empty() {
+            #[cfg(test)]
+            if fixture.config.docker_host == "fake" {
+                return fixture.cleanup_inner();
+            }
+            return Err(cleanup_failure(
+                "fixture journal lacks Docker daemon identity",
+            ));
+        } else {
             let daemon_id = fixture.docker(&["info", "--format", "{{.ID}}"])?;
             if daemon_id != fixture.journal.docker_daemon_id {
                 return Err(cleanup_failure("fixture Docker daemon identity changed"));
@@ -955,12 +960,9 @@ impl OracleFixture {
             .validate_root()?;
         self.validate_journal_paths()?;
         if self.journal.mutation_ambiguous {
-            if !self.recovery_mode {
-                return Err(cleanup_failure(
-                    "ambiguous Docker mutation requires a later recovery pass",
-                ));
-            }
-            self.settle_ambiguous_mutation()?;
+            return Err(cleanup_failure(
+                "ambiguous Docker mutation requires explicit daemon-side resolution",
+            ));
         }
         let mut failure: Option<PocFailure> = None;
         let trace_path = self.connection_trace_path();
@@ -987,11 +989,8 @@ impl OracleFixture {
                             };
                         if let Err(identity) = attachment_check {
                             record_cleanup_failure(&mut failure, identity);
-                        } else if self.docker(&["rm", "-f", &container_id]).is_err() {
-                            record_cleanup_failure(
-                                &mut failure,
-                                cleanup_failure("owned container could not be removed"),
-                            );
+                        } else if let Err(remove) = self.docker(&["rm", "-f", &container_id]) {
+                            record_cleanup_failure(&mut failure, remove);
                         }
                     }
                     Err(identity) => record_cleanup_failure(&mut failure, identity),
@@ -1004,11 +1003,8 @@ impl OracleFixture {
             match self.docker_exists("network", NETWORK_NAME) {
                 Ok(true) => match self.verify_network_identity() {
                     Ok(network_id) => {
-                        if self.docker(&["network", "rm", &network_id]).is_err() {
-                            record_cleanup_failure(
-                                &mut failure,
-                                cleanup_failure("owned network could not be removed"),
-                            );
+                        if let Err(remove) = self.docker(&["network", "rm", &network_id]) {
+                            record_cleanup_failure(&mut failure, remove);
                         }
                     }
                     Err(identity) => record_cleanup_failure(&mut failure, identity),
@@ -1021,11 +1017,8 @@ impl OracleFixture {
             match self.docker_exists("volume", VOLUME_NAME) {
                 Ok(true) => match self.verify_volume_identity() {
                     Ok(_) => {
-                        if self.docker(&["volume", "rm", VOLUME_NAME]).is_err() {
-                            record_cleanup_failure(
-                                &mut failure,
-                                cleanup_failure("owned volume could not be removed"),
-                            );
+                        if let Err(remove) = self.docker(&["volume", "rm", VOLUME_NAME]) {
+                            record_cleanup_failure(&mut failure, remove);
                         }
                     }
                     Err(identity) => record_cleanup_failure(&mut failure, identity),
@@ -1106,33 +1099,6 @@ impl OracleFixture {
                 if path.file_name().and_then(|name| name.to_str()) != Some(expected_name) {
                     return Err(cleanup_failure("owned credential file name is invalid"));
                 }
-            }
-        }
-        Ok(())
-    }
-
-    fn settle_ambiguous_mutation(&self) -> Result<(), PocFailure> {
-        let settle_deadline = Instant::now() + Duration::from_secs(3);
-        let mut previous = None;
-        let mut stable_observations = 0u8;
-        while stable_observations < 3 {
-            let current = (
-                self.docker_exists("container", CONTAINER_NAME)?,
-                self.docker_exists("network", NETWORK_NAME)?,
-                self.docker_exists("volume", VOLUME_NAME)?,
-            );
-            if previous == Some(current) {
-                stable_observations += 1;
-            } else {
-                previous = Some(current);
-                stable_observations = 1;
-            }
-            if stable_observations < 3 {
-                let remaining = settle_deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(cleanup_failure("ambiguous Docker mutation did not settle"));
-                }
-                thread::sleep(remaining.min(Duration::from_millis(500)));
             }
         }
         Ok(())
@@ -1919,7 +1885,6 @@ mod tests {
                 startup_timeout_seconds: 1,
             })
             .unwrap();
-
             assert!(!root.exists());
         }
     }
@@ -2095,15 +2060,16 @@ mod tests {
         journal.persist(&root).unwrap();
         drop(owner);
 
-        OracleFixture::cleanup_existing(FixtureConfig {
-            docker_program: docker,
-            docker_host: "fake".to_owned(),
-            root: root.clone(),
-            startup_timeout_seconds: 1,
-        })
-        .unwrap();
-
-        assert!(!root.exists());
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
     }
 
     #[test]
@@ -2142,14 +2108,16 @@ mod tests {
         );
         assert!(root.join("journal.json").exists());
 
-        OracleFixture::cleanup_existing(FixtureConfig {
-            docker_program: docker,
-            docker_host: "fake".to_owned(),
-            root: root.clone(),
-            startup_timeout_seconds: 1,
-        })
-        .unwrap();
-        assert!(!root.exists());
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
     }
 
     #[test]
@@ -2246,14 +2214,23 @@ mod tests {
             assert!(result.is_err(), "{operation}");
             drop(fixture);
 
-            OracleFixture::cleanup_existing(FixtureConfig {
+            let cleanup = OracleFixture::cleanup_existing(FixtureConfig {
                 docker_program: docker,
                 docker_host: "fake".to_owned(),
                 root: root.clone(),
                 startup_timeout_seconds: 1,
-            })
-            .unwrap_or_else(|failure| panic!("{operation}: {failure}"));
-            assert!(!root.exists(), "{operation}");
+            });
+            if matches!(
+                failpoint,
+                LifecycleFailpoint::VolumeCreatedBeforeIdentityPublication
+                    | LifecycleFailpoint::ContainerCreatedBeforeIdentityPublication
+            ) {
+                assert!(cleanup.is_err(), "{operation}");
+                assert!(root.join("journal.json").exists(), "{operation}");
+            } else {
+                cleanup.unwrap_or_else(|failure| panic!("{operation}: {failure}"));
+                assert!(!root.exists(), "{operation}");
+            }
         }
     }
 
@@ -2620,7 +2597,6 @@ mod tests {
             database_incarnation: None,
             trace_identity: Cell::new(None),
             operation_deadline: Cell::new(None),
-            recovery_mode: false,
             lifecycle_failpoint: Cell::new(None),
             cleanup_attempted: true,
         }
