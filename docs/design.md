@@ -116,7 +116,9 @@ by name alone.
 The production crate implements:
 
 - digest-pinned image-reference syntax validation;
-- explicit Free, Enterprise Developer, and Enterprise edition profiles;
+- explicit `Free`, `EnterpriseDeveloper`, and `Enterprise` repository
+  profiles, with Enterprise-capable artifacts separately governed by their
+  applicable terms;
 - explicit standalone and physical Data Guard replication profiles;
 - fail-closed rejection of Data Guard with Free edition;
 - exact replica-count contracts for the initial profiles;

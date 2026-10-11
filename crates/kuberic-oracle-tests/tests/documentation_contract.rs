@@ -1,5 +1,5 @@
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -98,6 +98,13 @@ fn relative_markdown_links_resolve() {
     }
 }
 
+#[test]
+fn duplicate_headings_receive_github_style_suffixes() {
+    let anchors = markdown_heading_anchors("# Section\n\n## Section\n");
+    assert!(anchors.contains("section"));
+    assert!(anchors.contains("section-1"));
+}
+
 fn markdown_link_targets(content: &str) -> Vec<String> {
     Parser::new_ext(content, Options::all())
         .filter_map(|event| match event {
@@ -109,6 +116,7 @@ fn markdown_link_targets(content: &str) -> Vec<String> {
 
 fn markdown_heading_anchors(content: &str) -> HashSet<String> {
     let mut anchors = HashSet::new();
+    let mut occurrences = HashMap::new();
     let mut heading = None;
 
     for event in Parser::new_ext(content, Options::all()) {
@@ -121,7 +129,15 @@ fn markdown_heading_anchors(content: &str) -> HashSet<String> {
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(heading) = heading.take() {
-                    anchors.insert(github_heading_anchor(&heading));
+                    let base = github_heading_anchor(&heading);
+                    let occurrence = occurrences.entry(base.clone()).or_insert(0usize);
+                    let anchor = if *occurrence == 0 {
+                        base
+                    } else {
+                        format!("{base}-{occurrence}")
+                    };
+                    *occurrence += 1;
+                    anchors.insert(anchor);
                 }
             }
             _ => {}

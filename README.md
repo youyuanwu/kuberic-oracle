@@ -87,7 +87,7 @@ security patches. See the
 The three-member Data Guard count is this repository's supported laboratory
 invariant, not an Oracle Data Guard product minimum.
 
-`Enterprise Developer` is repository shorthand, not an Oracle-published
+`EnterpriseDeveloper` is a repository profile name, not an Oracle-published
 edition or license tier. A non-production Enterprise-capable lab is permitted
 only when the applicable terms for the exact selected artifact allow its
 development, testing, prototyping, or demonstration use. Production use
