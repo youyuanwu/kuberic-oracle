@@ -1,5 +1,6 @@
 use kuberic_oracle::{
-    ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
+    ContractError, DatabaseId, DatabaseIncarnationIdentity, DatabaseIncarnationSnapshot,
+    DatabaseIncarnationStatus, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
     ForceLogging, InstanceSnapshot, LogMode, NativeEdition, NativeName, ObservationTarget,
     OpenMode, OracleObservation, OracleSupportConfig, PinnedImage, ProductSnapshot,
     ReplicationProfile, admit_observation,
@@ -52,6 +53,19 @@ fn observation(
             force_logging: ForceLogging::Enabled,
             is_container_database: true,
         },
+        incarnation: DatabaseIncarnationSnapshot {
+            identity: DatabaseIncarnationIdentity {
+                incarnation_number: 3,
+                resetlogs_id: 123_456_789,
+                resetlogs_change: DecimalScn::parse("100").unwrap(),
+            },
+            resetlogs_time: "2026-10-09T23:59:59".to_owned(),
+            prior_resetlogs_change: DecimalScn::parse("1").unwrap(),
+            prior_resetlogs_time: Some("2026-01-01T00:00:00".to_owned()),
+            prior_incarnation_number: 2,
+            status: DatabaseIncarnationStatus::Current,
+            container_id: 0,
+        },
         instance: InstanceSnapshot {
             instance_name: name("FREE"),
             host_name: name("oracle-free-1"),
@@ -85,6 +99,11 @@ fn target() -> ObservationTarget {
     ObservationTarget {
         database_id: DatabaseId::new(42).unwrap(),
         database_unique_name: name("FREE"),
+        incarnation: DatabaseIncarnationIdentity {
+            incarnation_number: 3,
+            resetlogs_id: 123_456_789,
+            resetlogs_change: DecimalScn::parse("100").unwrap(),
+        },
     }
 }
 
@@ -179,10 +198,29 @@ fn stale_observation_is_rejected() {
 }
 
 #[test]
+fn future_observation_is_rejected() {
+    assert_eq!(
+        admit_observation(
+            &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+            &target(),
+            &observation(
+                EditionProfile::Free,
+                DatabaseRole::Primary,
+                OpenMode::ReadWrite,
+            ),
+            9_000,
+            500,
+        ),
+        Err(ContractError::FutureObservation)
+    );
+}
+
+#[test]
 fn target_identity_must_match() {
     let mismatched = ObservationTarget {
         database_id: DatabaseId::new(43).unwrap(),
         database_unique_name: name("FREE"),
+        incarnation: target().incarnation,
     };
 
     assert_eq!(
@@ -198,6 +236,120 @@ fn target_identity_must_match() {
             500,
         ),
         Err(ContractError::DatabaseIdentityMismatch)
+    );
+}
+
+#[test]
+fn target_incarnation_must_match_even_when_dbid_matches() {
+    for field in ["incarnation_number", "resetlogs_id", "resetlogs_change"] {
+        let mut mismatched = target();
+        match field {
+            "incarnation_number" => mismatched.incarnation.incarnation_number += 1,
+            "resetlogs_id" => mismatched.incarnation.resetlogs_id += 1,
+            "resetlogs_change" => {
+                mismatched.incarnation.resetlogs_change = DecimalScn::parse("101").unwrap()
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(
+            admit_observation(
+                &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+                &mismatched,
+                &observation(
+                    EditionProfile::Free,
+                    DatabaseRole::Primary,
+                    OpenMode::ReadWrite,
+                ),
+                10_000,
+                500,
+            ),
+            Err(ContractError::DatabaseIncarnationMismatch),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn admission_revalidates_directly_constructed_lineage_evidence() {
+    let support = config(EditionProfile::Free, ReplicationProfile::Standalone, 1);
+
+    let mut mismatched = observation(
+        EditionProfile::Free,
+        DatabaseRole::Primary,
+        OpenMode::ReadWrite,
+    );
+    mismatched.database.resetlogs_change = DecimalScn::parse("101").unwrap();
+    assert_eq!(
+        admit_observation(&support, &target(), &mismatched, 10_000, 500),
+        Err(ContractError::ObservationIdentityChanged)
+    );
+
+    let mut wrong_scope = observation(
+        EditionProfile::Free,
+        DatabaseRole::Primary,
+        OpenMode::ReadWrite,
+    );
+    wrong_scope.incarnation.container_id = 3;
+    assert_eq!(
+        admit_observation(&support, &target(), &wrong_scope, 10_000, 500),
+        Err(ContractError::UnsupportedNativeValue {
+            field: "container_id",
+            value: "3".to_owned(),
+        })
+    );
+
+    let mut zero_identity = observation(
+        EditionProfile::Free,
+        DatabaseRole::Primary,
+        OpenMode::ReadWrite,
+    );
+    zero_identity.incarnation.identity.incarnation_number = 0;
+    assert_eq!(
+        admit_observation(&support, &target(), &zero_identity, 10_000, 500),
+        Err(ContractError::InvalidUnsignedInteger {
+            field: "incarnation_number",
+        })
+    );
+
+    let mut zero_resetlogs_id = observation(
+        EditionProfile::Free,
+        DatabaseRole::Primary,
+        OpenMode::ReadWrite,
+    );
+    zero_resetlogs_id.incarnation.identity.resetlogs_id = 0;
+    assert_eq!(
+        admit_observation(&support, &target(), &zero_resetlogs_id, 10_000, 500),
+        Err(ContractError::InvalidUnsignedInteger {
+            field: "resetlogs_id",
+        })
+    );
+
+    let mut malformed_time = observation(
+        EditionProfile::Free,
+        DatabaseRole::Primary,
+        OpenMode::ReadWrite,
+    );
+    malformed_time.incarnation.resetlogs_time = "not-a-date".to_owned();
+    assert!(matches!(
+        admit_observation(&support, &target(), &malformed_time, 10_000, 500),
+        Err(ContractError::UnsupportedNativeValue {
+            field: "resetlogs_time",
+            ..
+        })
+    ));
+
+    let mut missing_parent_time = observation(
+        EditionProfile::Free,
+        DatabaseRole::Primary,
+        OpenMode::ReadWrite,
+    );
+    missing_parent_time.incarnation.prior_resetlogs_time = None;
+    assert_eq!(
+        admit_observation(&support, &target(), &missing_parent_time, 10_000, 500),
+        Err(ContractError::MissingField {
+            field: "prior_resetlogs_time",
+        })
     );
 }
 

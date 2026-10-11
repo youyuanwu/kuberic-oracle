@@ -11,9 +11,11 @@ pub enum PocStage {
     Handshake,
     Connect,
     QueryIdentityBefore,
+    QueryIncarnationBefore,
     QueryDatabase,
     QueryInstance,
     QueryProduct,
+    QueryIncarnationAfter,
     QueryIdentityAfter,
     ParseAdmission,
     Close,
@@ -69,8 +71,26 @@ impl PocFailure {
         self
     }
 
-    pub(crate) fn with_cleanup(mut self, cleanup: PocFailure) -> Self {
+    pub(crate) fn fixture_command(message: String) -> Self {
+        Self {
+            stage: PocStage::Fixture,
+            category: PocCategory::Fixture,
+            oracle_code: None,
+            message,
+            cleanup: None,
+        }
+    }
+
+    pub fn with_cleanup(mut self, cleanup: PocFailure) -> Self {
         self.cleanup = Some(Box::new(cleanup));
+        self
+    }
+
+    pub(crate) fn append_cleanup(mut self, cleanup: PocFailure) -> Self {
+        self.cleanup = Some(match self.cleanup.take() {
+            Some(existing) => Box::new(existing.append_cleanup(cleanup)),
+            None => Box::new(cleanup),
+        });
         self
     }
 
@@ -92,6 +112,14 @@ impl PocFailure {
 
     pub fn fixture_assertion(message: &'static str) -> Self {
         Self::new(PocStage::Fixture, PocCategory::Fixture, message)
+    }
+
+    pub fn fixture_timeout() -> Self {
+        Self::new(
+            PocStage::Fixture,
+            PocCategory::Timeout,
+            "fixture operation timed out",
+        )
     }
 
     pub(crate) fn sanitized_from_worker(self) -> Self {

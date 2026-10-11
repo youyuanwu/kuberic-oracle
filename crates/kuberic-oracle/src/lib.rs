@@ -13,10 +13,12 @@ pub use config::{
 pub use error::ContractError;
 pub use observation::{Admission, ObservationTarget, admit_observation};
 pub use parser::{
-    RawDatabaseRow, RawInstanceRow, RawObservationIdentity, RawObservationRows, RawProductRow,
-    parse_observation_rows,
+    RawDatabaseIncarnationRow, RawDatabaseRow, RawInstanceRow, RawObservationIdentity,
+    RawObservationRows, RawProductRow, parse_observation_rows,
 };
 pub use types::{
-    DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging, InstanceSnapshot,
-    LogMode, NativeEdition, NativeName, OpenMode, OracleObservation, PinnedImage, ProductSnapshot,
+    DatabaseId, DatabaseIncarnationIdentity, DatabaseIncarnationSnapshot,
+    DatabaseIncarnationStatus, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging,
+    InstanceSnapshot, LogMode, NativeEdition, NativeName, OpenMode, OracleObservation, PinnedImage,
+    ProductSnapshot,
 };

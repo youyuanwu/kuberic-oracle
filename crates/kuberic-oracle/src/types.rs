@@ -219,6 +219,32 @@ pub enum NativeEdition {
     Enterprise,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseIncarnationStatus {
+    Current,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseIncarnationIdentity {
+    pub incarnation_number: u64,
+    pub resetlogs_id: u64,
+    pub resetlogs_change: DecimalScn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseIncarnationSnapshot {
+    pub identity: DatabaseIncarnationIdentity,
+    pub resetlogs_time: String,
+    pub prior_resetlogs_change: DecimalScn,
+    pub prior_resetlogs_time: Option<String>,
+    pub prior_incarnation_number: u64,
+    pub status: DatabaseIncarnationStatus,
+    pub container_id: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatabaseSnapshot {
@@ -262,6 +288,7 @@ pub struct ProductSnapshot {
 pub struct OracleObservation {
     pub observed_at_unix_millis: u64,
     pub database: DatabaseSnapshot,
+    pub incarnation: DatabaseIncarnationSnapshot,
     pub instance: InstanceSnapshot,
     pub product: ProductSnapshot,
 }

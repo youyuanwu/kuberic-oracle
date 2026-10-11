@@ -6,8 +6,10 @@ use std::{
 };
 
 use kuberic_oracle::{
-    DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging, InstanceSnapshot,
-    LogMode, NativeEdition, NativeName, OpenMode, OracleObservation, ProductSnapshot,
+    DatabaseId, DatabaseIncarnationIdentity, DatabaseIncarnationSnapshot,
+    DatabaseIncarnationStatus, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging,
+    InstanceSnapshot, LogMode, NativeEdition, NativeName, OpenMode, OracleObservation,
+    ProductSnapshot,
 };
 use kuberic_oracle_tests::poc::{
     HelperMode, PocStage,
@@ -225,6 +227,19 @@ fn observation() -> OracleObservation {
             log_mode: LogMode::ArchiveLog,
             force_logging: ForceLogging::Enabled,
             is_container_database: true,
+        },
+        incarnation: DatabaseIncarnationSnapshot {
+            identity: DatabaseIncarnationIdentity {
+                incarnation_number: 3,
+                resetlogs_id: 123_456_789,
+                resetlogs_change: DecimalScn::parse("100").unwrap(),
+            },
+            resetlogs_time: "2026-10-09T23:59:59".to_owned(),
+            prior_resetlogs_change: DecimalScn::parse("1").unwrap(),
+            prior_resetlogs_time: Some("2026-01-01T00:00:00".to_owned()),
+            prior_incarnation_number: 2,
+            status: DatabaseIncarnationStatus::Current,
+            container_id: 0,
         },
         instance: InstanceSnapshot {
             instance_name: name("FREE"),

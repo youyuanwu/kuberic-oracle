@@ -121,6 +121,7 @@ pub struct ObservationScope {
     pub connection_container: ConnectionContainer,
     pub container_data: ContainerDataPolicy,
     pub expected_database_rows: u16,
+    pub expected_incarnation_rows: u16,
     pub expected_instance_rows: u16,
     pub expected_product_rows: u16,
 }
@@ -128,6 +129,7 @@ pub struct ObservationScope {
 impl ObservationScope {
     pub fn validate(&self) -> Result<(), ContractError> {
         validate_row_count("expected_database_rows", self.expected_database_rows)?;
+        validate_row_count("expected_incarnation_rows", self.expected_incarnation_rows)?;
         validate_row_count("expected_instance_rows", self.expected_instance_rows)?;
         validate_row_count("expected_product_rows", self.expected_product_rows)?;
 

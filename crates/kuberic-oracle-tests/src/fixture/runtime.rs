@@ -10,6 +10,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use kuberic_oracle::{
+    DatabaseIncarnationIdentity, DecimalScn, query::DATABASE_TARGET_IDENTITY_SQL,
+};
+
 use crate::poc::{PocCategory, PocEndpoint, PocFailure, PocStage};
 use zeroize::Zeroizing;
 
@@ -26,6 +30,32 @@ const OBSERVER: &str = "KUBERIC_OBSERVER";
 const MAX_DOCKER_OUTPUT_BYTES: usize = 1024 * 1024;
 const DOCKER_OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixtureResourceEvidence {
+    pub container_id: String,
+    pub container_owner_label: String,
+    pub volume_identity: String,
+    pub volume_name: String,
+    pub volume_owner_label: String,
+    pub network_id: String,
+    pub network_owner_label: String,
+    pub attached_network_id: String,
+    pub image: String,
+    pub host_port: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleFailpoint {
+    ContainerRemovedBeforeClear,
+    ContainerClearedBeforeCreate,
+    VolumeRemovedBeforeClear,
+    VolumeClearedBeforeCreate,
+    VolumeCreatedBeforeIdentityPublication,
+    VolumeIdentityPublished,
+    ContainerCreatedBeforeIdentityPublication,
+    ContainerIdentityPublished,
+}
+
 pub struct OracleFixture {
     config: FixtureConfig,
     owner: Option<OwnerClaim>,
@@ -34,19 +64,53 @@ pub struct OracleFixture {
     credentials: Option<FixtureCredentials>,
     database_id: u64,
     database_unique_name: String,
+    database_incarnation: Option<DatabaseIncarnationIdentity>,
     trace_identity: Cell<Option<FileIdentity>>,
+    operation_deadline: Cell<Option<Instant>>,
+    #[cfg(test)]
+    lifecycle_failpoint: Cell<Option<LifecycleFailpoint>>,
     cleanup_attempted: bool,
 }
 
 impl OracleFixture {
     pub fn start(config: FixtureConfig) -> Result<Self, PocFailure> {
+        let timeout = Duration::from_secs(config.startup_timeout_seconds);
+        let operation_deadline = Instant::now() + timeout;
+        Self::start_with_deadlines(
+            config,
+            operation_deadline,
+            operation_deadline + DOCKER_OPERATION_TIMEOUT,
+        )
+    }
+
+    pub fn start_until(
+        config: FixtureConfig,
+        operation_deadline: Instant,
+    ) -> Result<Self, PocFailure> {
+        Self::start_with_deadlines(
+            config,
+            operation_deadline,
+            operation_deadline + DOCKER_OPERATION_TIMEOUT,
+        )
+    }
+
+    pub fn start_with_deadlines(
+        config: FixtureConfig,
+        operation_deadline: Instant,
+        cleanup_deadline: Instant,
+    ) -> Result<Self, PocFailure> {
+        if cleanup_deadline <= operation_deadline {
+            return Err(timeout_failure());
+        }
         let owner = OwnerClaim::acquire(&config.root)?;
         let token = owner.token.clone();
+        let docker_host = config.docker_host.clone();
         let mut fixture = Self {
             config,
             owner: Some(owner),
             journal: OwnershipJournal {
                 token,
+                docker_host,
                 network_name: NETWORK_NAME.to_owned(),
                 volume_name: VOLUME_NAME.to_owned(),
                 container_name: CONTAINER_NAME.to_owned(),
@@ -57,22 +121,51 @@ impl OracleFixture {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            database_incarnation: None,
             trace_identity: Cell::new(None),
+            operation_deadline: Cell::new(Some(operation_deadline)),
+            #[cfg(test)]
+            lifecycle_failpoint: Cell::new(None),
             cleanup_attempted: false,
         };
-        if let Err(operation) = fixture.start_inner() {
+        let operation = fixture.start_inner(operation_deadline);
+        if let Err(operation) = operation {
             fixture.cleanup_attempted = true;
+            fixture.operation_deadline.set(Some(cleanup_deadline));
             let cleanup = fixture.cleanup_inner().err();
             return Err(match cleanup {
                 Some(cleanup) => operation.with_cleanup(cleanup),
                 None => operation,
             });
         }
+        fixture.operation_deadline.set(None);
         Ok(fixture)
     }
 
     pub fn cleanup_existing(config: FixtureConfig) -> Result<(), PocFailure> {
+        Self::cleanup_existing_until(config, Instant::now() + Duration::from_secs(3 * 60))
+    }
+
+    pub fn cleanup_existing_until(
+        config: FixtureConfig,
+        cleanup_deadline: Instant,
+    ) -> Result<(), PocFailure> {
+        match std::fs::symlink_metadata(&config.root) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => {
+                return Err(cleanup_failure(
+                    "fixture root could not be inspected for recovery",
+                ));
+            }
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(cleanup_failure("fixture root type is invalid"));
+            }
+            Ok(_) => {}
+        }
         let (journal, journal_identity) = OwnershipJournal::load(&config.root)?;
+        if journal.docker_host != config.docker_host {
+            return Err(cleanup_failure("fixture Docker endpoint changed"));
+        }
         let owner = OwnerClaim::recover(&config.root, &journal.token)?;
         let mut fixture = Self {
             config,
@@ -82,9 +175,27 @@ impl OracleFixture {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            database_incarnation: None,
             trace_identity: Cell::new(None),
+            operation_deadline: Cell::new(Some(cleanup_deadline)),
+            #[cfg(test)]
+            lifecycle_failpoint: Cell::new(None),
             cleanup_attempted: true,
         };
+        if fixture.journal.docker_daemon_id.is_empty() {
+            #[cfg(test)]
+            if fixture.config.docker_host == "fake" {
+                return fixture.cleanup_inner();
+            }
+            return Err(cleanup_failure(
+                "fixture journal lacks Docker daemon identity",
+            ));
+        } else {
+            let daemon_id = fixture.docker(&["info", "--format", "{{.ID}}"])?;
+            if daemon_id != fixture.journal.docker_daemon_id {
+                return Err(cleanup_failure("fixture Docker daemon identity changed"));
+            }
+        }
         fixture.cleanup_inner()
     }
 
@@ -106,6 +217,165 @@ impl OracleFixture {
 
     pub fn database_unique_name(&self) -> &str {
         &self.database_unique_name
+    }
+
+    pub fn database_incarnation(&self) -> DatabaseIncarnationIdentity {
+        self.database_incarnation.unwrap()
+    }
+
+    pub fn set_operation_deadline(&self, operation_deadline: Instant) {
+        self.operation_deadline.set(Some(operation_deadline));
+    }
+
+    pub fn resource_evidence(&mut self) -> Result<FixtureResourceEvidence, PocFailure> {
+        let container_id = self.verify_container_identity()?;
+        let network_id = self.verify_network_identity()?;
+        let volume_identity = self.verify_volume_identity()?;
+        let (volume_name, attached_network_id) =
+            self.verify_container_mount_and_network(&network_id)?;
+        let container_owner_label = self.inspect_container_owner_label()?;
+        let network_owner_label = self.inspect_network_owner_label()?;
+        let volume_owner_label = self.inspect_volume_owner_label()?;
+        let host_port = self.discover_port()?;
+        if self.journal.host_port != host_port {
+            self.journal.host_port = host_port;
+            self.persist_journal()?;
+        }
+        Ok(FixtureResourceEvidence {
+            container_id,
+            container_owner_label,
+            volume_identity,
+            volume_name,
+            volume_owner_label,
+            network_id,
+            network_owner_label,
+            attached_network_id,
+            image: self.journal.image.clone(),
+            host_port,
+        })
+    }
+
+    pub fn restart_container(
+        &mut self,
+        operation_deadline: Instant,
+    ) -> Result<FixtureResourceEvidence, PocFailure> {
+        let previous = self.operation_deadline.replace(Some(operation_deadline));
+        let result = self.restart_container_inner(operation_deadline);
+        self.operation_deadline.set(previous);
+        result
+    }
+
+    fn restart_container_inner(
+        &mut self,
+        operation_deadline: Instant,
+    ) -> Result<FixtureResourceEvidence, PocFailure> {
+        let before = self.resource_evidence()?;
+        self.docker_with_deadline(
+            &["restart", &before.container_id],
+            operation_deadline,
+            DOCKER_OPERATION_TIMEOUT,
+        )?;
+        self.wait_ready(operation_deadline)?;
+        self.journal.host_port = self.discover_port()?;
+        self.persist_journal()?;
+        self.verify_privileges()?;
+        self.refresh_database_identity()?;
+        self.resource_evidence()
+    }
+
+    pub fn recreate_container_same_volume(
+        &mut self,
+        operation_deadline: Instant,
+    ) -> Result<FixtureResourceEvidence, PocFailure> {
+        let previous = self.operation_deadline.replace(Some(operation_deadline));
+        let result = self.recreate_container_same_volume_inner(operation_deadline);
+        self.operation_deadline.set(previous);
+        result
+    }
+
+    fn recreate_container_same_volume_inner(
+        &mut self,
+        operation_deadline: Instant,
+    ) -> Result<FixtureResourceEvidence, PocFailure> {
+        let before = self.resource_evidence()?;
+        self.docker_with_deadline(
+            &["rm", "-f", &before.container_id],
+            operation_deadline,
+            DOCKER_OPERATION_TIMEOUT,
+        )?;
+        if self.docker_exists("container", CONTAINER_NAME)? {
+            return Err(fixture_failure("owned container removal was not confirmed"));
+        }
+        self.fail_lifecycle(LifecycleFailpoint::ContainerRemovedBeforeClear)?;
+        self.journal.container_id.clear();
+        self.journal.host_port = 0;
+        self.persist_journal()?;
+        self.fail_lifecycle(LifecycleFailpoint::ContainerClearedBeforeCreate)?;
+        self.verify_network_identity()?;
+        self.verify_volume_identity()?;
+        self.create_container(operation_deadline)?;
+        self.wait_ready(operation_deadline)?;
+        self.journal.host_port = self.discover_port()?;
+        self.persist_journal()?;
+        self.verify_network_ownership()?;
+        self.verify_privileges()?;
+        self.refresh_database_identity()?;
+        self.resource_evidence()
+    }
+
+    pub fn replace_with_fresh_volume(
+        &mut self,
+        operation_deadline: Instant,
+    ) -> Result<FixtureResourceEvidence, PocFailure> {
+        let previous = self.operation_deadline.replace(Some(operation_deadline));
+        let result = self.replace_with_fresh_volume_inner(operation_deadline);
+        self.operation_deadline.set(previous);
+        result
+    }
+
+    fn replace_with_fresh_volume_inner(
+        &mut self,
+        operation_deadline: Instant,
+    ) -> Result<FixtureResourceEvidence, PocFailure> {
+        let before = self.resource_evidence()?;
+        self.docker_with_deadline(
+            &["rm", "-f", &before.container_id],
+            operation_deadline,
+            DOCKER_OPERATION_TIMEOUT,
+        )?;
+        if self.docker_exists("container", CONTAINER_NAME)? {
+            return Err(fixture_failure("owned container removal was not confirmed"));
+        }
+        self.fail_lifecycle(LifecycleFailpoint::ContainerRemovedBeforeClear)?;
+        self.journal.container_id.clear();
+        self.journal.host_port = 0;
+        self.persist_journal()?;
+
+        self.verify_volume_identity()?;
+        self.docker_with_deadline(
+            &["volume", "rm", VOLUME_NAME],
+            operation_deadline,
+            DOCKER_OPERATION_TIMEOUT,
+        )?;
+        if self.docker_exists("volume", VOLUME_NAME)? {
+            return Err(fixture_failure("owned volume removal was not confirmed"));
+        }
+        self.fail_lifecycle(LifecycleFailpoint::VolumeRemovedBeforeClear)?;
+        self.journal.volume_identity.clear();
+        self.persist_journal()?;
+        self.fail_lifecycle(LifecycleFailpoint::VolumeClearedBeforeCreate)?;
+
+        self.verify_network_identity()?;
+        self.create_volume(operation_deadline)?;
+        self.create_container(operation_deadline)?;
+        self.wait_ready(operation_deadline)?;
+        self.journal.host_port = self.discover_port()?;
+        self.persist_journal()?;
+        self.verify_network_ownership()?;
+        self.provision_observer()?;
+        self.verify_privileges()?;
+        self.refresh_database_identity()?;
+        self.resource_evidence()
     }
 
     pub fn create_wrong_password_file(&mut self) -> Result<(PathBuf, FileIdentity), PocFailure> {
@@ -198,6 +468,11 @@ impl OracleFixture {
         path: &Path,
         identity: FileIdentity,
     ) -> Result<(), PocFailure> {
+        self.owner
+            .as_ref()
+            .ok_or_else(|| cleanup_failure("fixture owner claim is unavailable"))?
+            .validate_root()?;
+        self.validate_owned_path(path)?;
         if !identity.matches_path(path) {
             return Err(cleanup_failure("owned temporary file identity changed"));
         }
@@ -210,7 +485,10 @@ impl OracleFixture {
     }
 
     pub fn revoke_view(&self, view: &str) -> Result<(), PocFailure> {
-        if !matches!(view, "SYS.V_$DATABASE" | "SYS.V_$INSTANCE") {
+        if !matches!(
+            view,
+            "SYS.V_$DATABASE" | "SYS.V_$INSTANCE" | "SYS.V_$DATABASE_INCARNATION"
+        ) {
             return Err(fixture_failure("unsupported fixture grant mutation"));
         }
         self.execute_sql(&format!(
@@ -219,7 +497,10 @@ impl OracleFixture {
     }
 
     pub fn grant_view(&self, view: &str) -> Result<(), PocFailure> {
-        if !matches!(view, "SYS.V_$DATABASE" | "SYS.V_$INSTANCE") {
+        if !matches!(
+            view,
+            "SYS.V_$DATABASE" | "SYS.V_$INSTANCE" | "SYS.V_$DATABASE_INCARNATION"
+        ) {
             return Err(fixture_failure("unsupported fixture grant mutation"));
         }
         self.execute_sql(&format!(
@@ -237,8 +518,8 @@ impl OracleFixture {
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='CREATE SESSION' AND ADMIN_OPTION='NO') || ':' || \
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE <> 'CREATE SESSION') || ':' || \
                  (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}') || ':' || \
-                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO') || ':' || \
-                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO')) || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE','V_$DATABASE_INCARNATION') AND GRANTABLE='NO') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE','V_$DATABASE_INCARNATION') AND GRANTABLE='NO')) || ':' || \
                  (SELECT COUNT(*) FROM V$PWFILE_USERS WHERE USERNAME='{OBSERVER}') || ':' || \
                  (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND OWNER='SYS' AND TABLE_NAME='PRODUCT_COMPONENT_VERSION' AND PRIVILEGE='READ') || ':' || \
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE IN ('SELECT ANY TABLE','SELECT ANY DICTIONARY','CREATE USER','ALTER USER','DROP USER','ALTER DATABASE','ALTER SYSTEM')) || ':' || \
@@ -247,7 +528,7 @@ impl OracleFixture {
                  FROM DUAL"
             ),
         )?;
-        if result != "0:1:1:0:2:2:0:0:1:0:0:0" {
+        if result != "0:1:1:0:3:3:0:0:1:0:0:0" {
             return Err(fixture_failure(
                 "observer effective privileges exceed the PoC profile",
             ));
@@ -260,8 +541,20 @@ impl OracleFixture {
         self.cleanup_inner()
     }
 
-    fn start_inner(&mut self) -> Result<(), PocFailure> {
-        self.preflight()?;
+    pub fn cleanup_until(mut self, cleanup_deadline: Instant) -> Result<(), PocFailure> {
+        self.cleanup_attempted = true;
+        self.operation_deadline.set(Some(cleanup_deadline));
+        self.cleanup_inner()
+    }
+
+    fn start_inner(&mut self, operation_deadline: Instant) -> Result<(), PocFailure> {
+        let daemon_id = self.preflight(operation_deadline)?;
+        self.journal.docker_daemon_id = daemon_id;
+        self.persist_journal()?;
+        self.owner
+            .as_ref()
+            .ok_or_else(|| fixture_failure("fixture owner claim is unavailable"))?
+            .validate_root()?;
         let credentials = FixtureCredentials::create(&self.config.root)?;
         self.journal.username_file = Some((
             credentials.username_file.clone(),
@@ -279,6 +572,7 @@ impl OracleFixture {
         self.persist_journal()?;
 
         self.journal.network_expected = true;
+        self.journal.mutation_ambiguous = true;
         self.persist_journal()?;
         self.journal.network_id = self.docker(&[
             "network",
@@ -287,83 +581,76 @@ impl OracleFixture {
             &format!("kuberic.oracle.owner={}", self.journal.token),
             NETWORK_NAME,
         ])?;
+        self.journal.mutation_ambiguous = false;
         self.persist_journal()?;
 
-        self.journal.volume_expected = true;
-        self.persist_journal()?;
-        self.docker(&[
-            "volume",
-            "create",
-            "--label",
-            &format!("kuberic.oracle.owner={}", self.journal.token),
-            VOLUME_NAME,
-        ])?;
-        self.journal.volume_identity = self.docker(&[
-            "volume",
-            "inspect",
-            VOLUME_NAME,
-            "--format",
-            "{{.CreatedAt}}|{{.Mountpoint}}|{{.Driver}}",
-        ])?;
-        self.persist_journal()?;
-
-        let admin_env_file = self
-            .credentials
-            .as_ref()
-            .unwrap()
-            .admin_env_file
-            .to_string_lossy()
-            .into_owned();
-        self.journal.container_expected = true;
-        self.persist_journal()?;
-        self.journal.container_id = self.docker_with_timeout(
-            &[
-                "run",
-                "-d",
-                "--name",
-                CONTAINER_NAME,
-                "--label",
-                &format!("kuberic.oracle.owner={}", self.journal.token),
-                "--network",
-                NETWORK_NAME,
-                "--volume",
-                &format!("{VOLUME_NAME}:/opt/oracle/oradata"),
-                "--publish",
-                "127.0.0.1::1521",
-                "--env-file",
-                &admin_env_file,
-                IMAGE,
-            ],
-            Duration::from_secs(self.config.startup_timeout_seconds),
-        )?;
-        self.persist_journal()?;
-        self.wait_ready()?;
+        self.create_volume(operation_deadline)?;
+        self.create_container(operation_deadline)?;
+        self.wait_ready(operation_deadline)?;
         self.journal.host_port = self.discover_port()?;
         self.persist_journal()?;
         self.verify_network_ownership()?;
         self.provision_observer()?;
         self.verify_privileges()?;
+        self.refresh_database_identity()
+    }
+
+    fn refresh_database_identity(&mut self) -> Result<(), PocFailure> {
         let identity = self.query_scalar(
             "ALTER SESSION SET CONTAINER=FREEPDB1;",
-            "SELECT DBID || ':' || DB_UNIQUE_NAME FROM V$DATABASE",
+            DATABASE_TARGET_IDENTITY_SQL,
         )?;
-        let (database_id, unique_name) = identity
-            .split_once(':')
+        let mut identity = identity.split(':');
+        let database_id = identity
+            .next()
             .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let unique_name = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let incarnation_number = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let resetlogs_id = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let resetlogs_change = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        if identity.next().is_some() {
+            return Err(fixture_failure("database identity query was malformed"));
+        }
         self.database_id = database_id
             .parse()
             .map_err(|_| fixture_failure("database ID query was malformed"))?;
         self.database_unique_name = unique_name.to_owned();
+        self.database_incarnation = Some(DatabaseIncarnationIdentity {
+            incarnation_number: incarnation_number
+                .parse()
+                .map_err(|_| fixture_failure("database incarnation query was malformed"))?,
+            resetlogs_id: resetlogs_id
+                .parse()
+                .map_err(|_| fixture_failure("database incarnation query was malformed"))?,
+            resetlogs_change: DecimalScn::parse(resetlogs_change)
+                .map_err(|_| fixture_failure("database incarnation query was malformed"))?,
+        });
         Ok(())
     }
 
-    fn preflight(&self) -> Result<(), PocFailure> {
+    fn preflight(&self, operation_deadline: Instant) -> Result<String, PocFailure> {
         if std::env::consts::ARCH != "x86_64" || std::env::consts::OS != "linux" {
             return Err(fixture_failure("live PoC requires Linux x86-64"));
         }
         let architecture = self.docker(&["info", "--format", "{{.Architecture}}"])?;
         if architecture != "x86_64" {
             return Err(fixture_failure("Docker architecture is unsupported"));
+        }
+        let daemon_id = self.docker(&["info", "--format", "{{.ID}}"])?;
+        if daemon_id.is_empty()
+            || daemon_id.len() > 256
+            || daemon_id.trim() != daemon_id
+            || daemon_id.chars().any(char::is_control)
+        {
+            return Err(fixture_failure("Docker daemon identity is invalid"));
         }
         let strace = Command::new("strace")
             .arg("--version")
@@ -393,20 +680,94 @@ impl OracleFixture {
                     "Docker storage is insufficient for the Oracle image",
                 ));
             }
-            self.docker_with_timeout(
+            self.docker_with_deadline(
                 &["pull", IMAGE],
+                operation_deadline,
                 Duration::from_secs(self.config.startup_timeout_seconds),
             )?;
         }
-        Ok(())
+        Ok(daemon_id)
     }
 
-    fn wait_ready(&self) -> Result<(), PocFailure> {
-        let deadline = Instant::now() + Duration::from_secs(self.config.startup_timeout_seconds);
+    fn create_volume(&mut self, operation_deadline: Instant) -> Result<(), PocFailure> {
+        self.journal.volume_expected = true;
+        self.journal.mutation_ambiguous = true;
+        self.persist_journal()?;
+        self.docker_with_deadline(
+            &[
+                "volume",
+                "create",
+                "--label",
+                &format!("kuberic.oracle.owner={}", self.journal.token),
+                VOLUME_NAME,
+            ],
+            operation_deadline,
+            DOCKER_OPERATION_TIMEOUT,
+        )?;
+        self.fail_lifecycle(LifecycleFailpoint::VolumeCreatedBeforeIdentityPublication)?;
+        self.journal.volume_identity = self.docker_with_deadline(
+            &[
+                "volume",
+                "inspect",
+                VOLUME_NAME,
+                "--format",
+                "{{.CreatedAt}}|{{.Mountpoint}}|{{.Driver}}",
+            ],
+            operation_deadline,
+            DOCKER_OPERATION_TIMEOUT,
+        )?;
+        self.journal.mutation_ambiguous = false;
+        self.persist_journal()?;
+        self.fail_lifecycle(LifecycleFailpoint::VolumeIdentityPublished)
+    }
+
+    fn create_container(&mut self, operation_deadline: Instant) -> Result<(), PocFailure> {
+        let admin_env_file = self
+            .credentials
+            .as_ref()
+            .unwrap()
+            .admin_env_file
+            .to_string_lossy()
+            .into_owned();
+        self.journal.container_expected = true;
+        self.journal.mutation_ambiguous = true;
+        self.persist_journal()?;
+        let container_id = self.docker_with_deadline(
+            &[
+                "run",
+                "-d",
+                "--name",
+                CONTAINER_NAME,
+                "--label",
+                &format!("kuberic.oracle.owner={}", self.journal.token),
+                "--network",
+                NETWORK_NAME,
+                "--volume",
+                &format!("{VOLUME_NAME}:/opt/oracle/oradata"),
+                "--publish",
+                "127.0.0.1::1521",
+                "--env-file",
+                &admin_env_file,
+                IMAGE,
+            ],
+            operation_deadline,
+            Duration::from_secs(self.config.startup_timeout_seconds),
+        )?;
+        self.fail_lifecycle(LifecycleFailpoint::ContainerCreatedBeforeIdentityPublication)?;
+        self.journal.container_id = container_id;
+        self.journal.mutation_ambiguous = false;
+        self.persist_journal()?;
+        self.fail_lifecycle(LifecycleFailpoint::ContainerIdentityPublished)
+    }
+
+    fn wait_ready(&self, operation_deadline: Instant) -> Result<(), PocFailure> {
+        let startup_deadline =
+            Instant::now() + Duration::from_secs(self.config.startup_timeout_seconds);
+        let deadline = operation_deadline.min(startup_deadline);
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(fixture_failure("Oracle container readiness timed out"));
+                return Err(timeout_failure());
             }
             let status = self.docker_with_timeout(
                 &[
@@ -423,9 +784,15 @@ impl OracleFixture {
                     return Err(fixture_failure("Oracle container failed readiness"));
                 }
                 _ if Instant::now() >= deadline => {
-                    return Err(fixture_failure("Oracle container readiness timed out"));
+                    return Err(timeout_failure());
                 }
-                _ => thread::sleep(Duration::from_secs(5)),
+                _ => {
+                    let sleep = deadline.saturating_duration_since(Instant::now());
+                    if sleep.is_zero() {
+                        return Err(timeout_failure());
+                    }
+                    thread::sleep(sleep.min(Duration::from_secs(5)));
+                }
             }
         }
     }
@@ -468,6 +835,33 @@ impl OracleFixture {
         Ok(())
     }
 
+    fn verify_container_mount_and_network(
+        &self,
+        network_id: &str,
+    ) -> Result<(String, String), PocFailure> {
+        let mounted_volume = self.docker(&[
+            "inspect",
+            CONTAINER_NAME,
+            "--format",
+            "{{range .Mounts}}{{if eq .Destination \"/opt/oracle/oradata\"}}{{.Name}}{{end}}{{end}}",
+        ])?;
+        if mounted_volume != VOLUME_NAME {
+            return Err(cleanup_failure("owned container volume attachment changed"));
+        }
+        let attached_network = self.docker(&[
+            "inspect",
+            CONTAINER_NAME,
+            "--format",
+            "{{(index .NetworkSettings.Networks \"kuberic-oracle-poc-network\").NetworkID}}",
+        ])?;
+        if attached_network != network_id {
+            return Err(cleanup_failure(
+                "owned container network attachment changed",
+            ));
+        }
+        Ok((mounted_volume, attached_network))
+    }
+
     fn provision_observer(&self) -> Result<(), PocFailure> {
         let credentials = self.credentials.as_ref().unwrap();
         let statements = Zeroizing::new(format!(
@@ -475,9 +869,11 @@ impl OracleFixture {
              CREATE USER {} IDENTIFIED BY \"{}\";\n\
              GRANT CREATE SESSION TO {};\n\
              GRANT SELECT ON SYS.V_$DATABASE TO {};\n\
-             GRANT SELECT ON SYS.V_$INSTANCE TO {};",
+             GRANT SELECT ON SYS.V_$INSTANCE TO {};\n\
+             GRANT SELECT ON SYS.V_$DATABASE_INCARNATION TO {};",
             credentials.username,
             credentials.password.as_str(),
+            credentials.username,
             credentials.username,
             credentials.username,
             credentials.username,
@@ -536,16 +932,43 @@ impl OracleFixture {
     }
 
     fn persist_journal(&mut self) -> Result<(), PocFailure> {
+        self.owner
+            .as_ref()
+            .ok_or_else(|| fixture_failure("fixture owner claim is unavailable"))?
+            .validate_root()?;
         self.journal_identity = Some(self.journal.persist(&self.config.root)?);
         Ok(())
     }
 
+    #[cfg(test)]
+    fn fail_lifecycle(&self, point: LifecycleFailpoint) -> Result<(), PocFailure> {
+        if self.lifecycle_failpoint.get() == Some(point) {
+            return Err(fixture_failure("injected fixture lifecycle interruption"));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn fail_lifecycle(&self, _point: LifecycleFailpoint) -> Result<(), PocFailure> {
+        Ok(())
+    }
+
     fn cleanup_inner(&mut self) -> Result<(), PocFailure> {
+        self.owner
+            .as_ref()
+            .ok_or_else(|| cleanup_failure("fixture owner claim is unavailable"))?
+            .validate_root()?;
+        self.validate_journal_paths()?;
+        if self.journal.mutation_ambiguous {
+            return Err(cleanup_failure(
+                "ambiguous Docker mutation requires explicit daemon-side resolution",
+            ));
+        }
         let mut failure: Option<PocFailure> = None;
         let trace_path = self.connection_trace_path();
         if trace_path.exists() {
             if let Err(trace_failure) = self.remove_connection_trace(&trace_path) {
-                failure = Some(trace_failure);
+                record_cleanup_failure(&mut failure, trace_failure);
             }
         } else {
             self.trace_identity.set(None);
@@ -554,49 +977,54 @@ impl OracleFixture {
             match self.docker_exists("container", CONTAINER_NAME) {
                 Ok(true) => match self.verify_container_identity() {
                     Ok(container_id) => {
-                        if self.docker(&["rm", "-f", &container_id]).is_err() {
-                            failure = Some(cleanup_failure("owned container could not be removed"));
+                        let attachment_check =
+                            if self.journal.network_expected && self.journal.volume_expected {
+                                self.verify_network_identity().and_then(|network_id| {
+                                    self.verify_volume_identity()?;
+                                    self.verify_container_mount_and_network(&network_id)
+                                        .map(|_| ())
+                                })
+                            } else {
+                                Ok(())
+                            };
+                        if let Err(identity) = attachment_check {
+                            record_cleanup_failure(&mut failure, identity);
+                        } else if let Err(remove) = self.docker(&["rm", "-f", &container_id]) {
+                            record_cleanup_failure(&mut failure, remove);
                         }
                     }
-                    Err(identity) => failure = Some(identity),
+                    Err(identity) => record_cleanup_failure(&mut failure, identity),
                 },
                 Ok(false) => {}
-                Err(inspect) => failure = Some(inspect),
+                Err(inspect) => record_cleanup_failure(&mut failure, inspect),
             }
         }
         if self.journal.network_expected {
             match self.docker_exists("network", NETWORK_NAME) {
                 Ok(true) => match self.verify_network_identity() {
                     Ok(network_id) => {
-                        if self.docker(&["network", "rm", &network_id]).is_err()
-                            && failure.is_none()
-                        {
-                            failure = Some(cleanup_failure("owned network could not be removed"));
+                        if let Err(remove) = self.docker(&["network", "rm", &network_id]) {
+                            record_cleanup_failure(&mut failure, remove);
                         }
                     }
-                    Err(identity) if failure.is_none() => failure = Some(identity),
-                    Err(_) => {}
+                    Err(identity) => record_cleanup_failure(&mut failure, identity),
                 },
                 Ok(false) => {}
-                Err(inspect) if failure.is_none() => failure = Some(inspect),
-                Err(_) => {}
+                Err(inspect) => record_cleanup_failure(&mut failure, inspect),
             }
         }
         if self.journal.volume_expected {
             match self.docker_exists("volume", VOLUME_NAME) {
                 Ok(true) => match self.verify_volume_identity() {
-                    Ok(()) => {
-                        if self.docker(&["volume", "rm", VOLUME_NAME]).is_err() && failure.is_none()
-                        {
-                            failure = Some(cleanup_failure("owned volume could not be removed"));
+                    Ok(_) => {
+                        if let Err(remove) = self.docker(&["volume", "rm", VOLUME_NAME]) {
+                            record_cleanup_failure(&mut failure, remove);
                         }
                     }
-                    Err(identity) if failure.is_none() => failure = Some(identity),
-                    Err(_) => {}
+                    Err(identity) => record_cleanup_failure(&mut failure, identity),
                 },
                 Ok(false) => {}
-                Err(inspect) if failure.is_none() => failure = Some(inspect),
-                Err(_) => {}
+                Err(inspect) => record_cleanup_failure(&mut failure, inspect),
             }
         }
         if let Some(failure) = failure {
@@ -657,17 +1085,38 @@ impl OracleFixture {
         }
     }
 
+    fn validate_journal_paths(&self) -> Result<(), PocFailure> {
+        for (path, _) in self.journal.temporary_files.iter() {
+            self.validate_owned_path(path)?;
+        }
+        for (owned, expected_name) in [
+            (self.journal.username_file.as_ref(), "observer-username"),
+            (self.journal.password_file.as_ref(), "observer-password"),
+            (self.journal.admin_env_file.as_ref(), "oracle-admin.env"),
+        ] {
+            if let Some((path, _)) = owned {
+                self.validate_owned_path(path)?;
+                if path.file_name().and_then(|name| name.to_str()) != Some(expected_name) {
+                    return Err(cleanup_failure("owned credential file name is invalid"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_owned_path(&self, path: &Path) -> Result<(), PocFailure> {
+        if path.parent() != Some(self.config.root.as_path()) {
+            return Err(cleanup_failure("owned file path escaped the fixture root"));
+        }
+        Ok(())
+    }
+
     fn verify_container_identity(&mut self) -> Result<String, PocFailure> {
         let current = self.docker(&["inspect", CONTAINER_NAME, "--format", "{{.Id}}"])?;
         if !self.journal.container_id.is_empty() && current != self.journal.container_id {
             return Err(cleanup_failure("owned container identity changed"));
         }
-        let label = self.docker(&[
-            "inspect",
-            CONTAINER_NAME,
-            "--format",
-            "{{index .Config.Labels \"kuberic.oracle.owner\"}}",
-        ])?;
+        let label = self.inspect_container_owner_label()?;
         if label != self.journal.token {
             return Err(cleanup_failure("owned container ownership changed"));
         }
@@ -687,13 +1136,7 @@ impl OracleFixture {
         if !self.journal.network_id.is_empty() && current != self.journal.network_id {
             return Err(cleanup_failure("owned network identity changed"));
         }
-        let label = self.docker(&[
-            "network",
-            "inspect",
-            NETWORK_NAME,
-            "--format",
-            "{{index .Labels \"kuberic.oracle.owner\"}}",
-        ])?;
+        let label = self.inspect_network_owner_label()?;
         if label != self.journal.token {
             return Err(cleanup_failure("owned network ownership changed"));
         }
@@ -704,7 +1147,7 @@ impl OracleFixture {
         Ok(current)
     }
 
-    fn verify_volume_identity(&self) -> Result<(), PocFailure> {
+    fn verify_volume_identity(&mut self) -> Result<String, PocFailure> {
         let current = self.docker(&[
             "volume",
             "inspect",
@@ -715,17 +1158,44 @@ impl OracleFixture {
         if !self.journal.volume_identity.is_empty() && current != self.journal.volume_identity {
             return Err(cleanup_failure("owned volume identity changed"));
         }
-        let label = self.docker(&[
+        let label = self.inspect_volume_owner_label()?;
+        if label != self.journal.token {
+            return Err(cleanup_failure("owned volume ownership changed"));
+        }
+        if self.journal.volume_identity.is_empty() {
+            self.journal.volume_identity = current.clone();
+            self.persist_journal()?;
+        }
+        Ok(current)
+    }
+
+    fn inspect_container_owner_label(&self) -> Result<String, PocFailure> {
+        self.docker(&[
+            "inspect",
+            CONTAINER_NAME,
+            "--format",
+            "{{index .Config.Labels \"kuberic.oracle.owner\"}}",
+        ])
+    }
+
+    fn inspect_network_owner_label(&self) -> Result<String, PocFailure> {
+        self.docker(&[
+            "network",
+            "inspect",
+            NETWORK_NAME,
+            "--format",
+            "{{index .Labels \"kuberic.oracle.owner\"}}",
+        ])
+    }
+
+    fn inspect_volume_owner_label(&self) -> Result<String, PocFailure> {
+        self.docker(&[
             "volume",
             "inspect",
             VOLUME_NAME,
             "--format",
             "{{index .Labels \"kuberic.oracle.owner\"}}",
-        ])?;
-        if label != self.journal.token {
-            return Err(cleanup_failure("owned volume ownership changed"));
-        }
-        Ok(())
+        ])
     }
 
     fn docker_exists(&self, kind: &str, name: &str) -> Result<bool, PocFailure> {
@@ -743,14 +1213,62 @@ impl OracleFixture {
     }
 
     fn docker_with_timeout(&self, args: &[&str], timeout: Duration) -> Result<String, PocFailure> {
-        self.run_docker(args, None, timeout)
+        let timeout = match self.operation_deadline.get() {
+            Some(deadline) => deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(timeout_failure)?
+                .min(timeout),
+            None => timeout,
+        };
+        let result = self.run_docker(args, None, timeout);
+        if result.is_err()
+            && self
+                .operation_deadline
+                .get()
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(timeout_failure());
+        }
+        result
+    }
+
+    fn docker_with_deadline(
+        &self,
+        args: &[&str],
+        operation_deadline: Instant,
+        local_limit: Duration,
+    ) -> Result<String, PocFailure> {
+        let timeout = operation_deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(timeout_failure)?
+            .min(local_limit);
+        self.docker_with_timeout(args, timeout)
     }
 
     fn docker_with_input(&self, args: &[&str], input: &[u8]) -> Result<String, PocFailure> {
         if input.len() > 4096 {
             return Err(fixture_failure("Docker input exceeds the fixture bound"));
         }
-        self.run_docker(args, Some(input), DOCKER_OPERATION_TIMEOUT)
+        let timeout = match self.operation_deadline.get() {
+            Some(deadline) => deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(timeout_failure)?
+                .min(DOCKER_OPERATION_TIMEOUT),
+            None => DOCKER_OPERATION_TIMEOUT,
+        };
+        let result = self.run_docker(args, Some(input), timeout);
+        if result.is_err()
+            && self
+                .operation_deadline
+                .get()
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(timeout_failure());
+        }
+        result
     }
 
     fn run_docker(
@@ -771,7 +1289,7 @@ impl OracleFixture {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .map_err(|_| fixture_failure("Docker command could not be started"))?;
+            .map_err(|_| fixture_failure(docker_start_failure(args)))?;
         let stdout = child
             .stdout
             .take()
@@ -807,7 +1325,7 @@ impl OracleFixture {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
-                return Err(fixture_failure("Docker command timed out"));
+                return Err(fixture_failure(docker_timeout_failure(args)));
             }
             thread::sleep(Duration::from_millis(20));
         };
@@ -819,7 +1337,73 @@ impl OracleFixture {
             return Err(fixture_failure("Docker command output exceeded the bound"));
         }
         if !status.success() {
-            return Err(fixture_failure("Docker fixture operation failed"));
+            let code = status
+                .code()
+                .map_or_else(|| "signal".to_owned(), |code| code.to_string());
+            return Err(PocFailure::fixture_command(format!(
+                "Docker {} failed with exit status {code}",
+                docker_operation_label(args)
+            )));
+        }
+
+        fn docker_start_failure(args: &[&str]) -> &'static str {
+            match docker_operation_class(args) {
+                "inspect" => "Docker inspection could not be started",
+                "create" => "Docker resource creation could not be started",
+                "remove" => "Docker resource removal could not be started",
+                "restart" => "Docker container restart could not be started",
+                "exec" => "Docker fixture SQL could not be started",
+                "pull" => "Docker image pull could not be started",
+                _ => "Docker command could not be started",
+            }
+        }
+
+        fn docker_timeout_failure(args: &[&str]) -> &'static str {
+            match docker_operation_class(args) {
+                "inspect" => "Docker inspection timed out",
+                "create" => "Docker resource creation timed out",
+                "remove" => "Docker resource removal timed out",
+                "restart" => "Docker container restart timed out",
+                "exec" => "Docker fixture SQL timed out",
+                "pull" => "Docker image pull timed out",
+                _ => "Docker command timed out",
+            }
+        }
+
+        fn docker_operation_class(args: &[&str]) -> &'static str {
+            match args {
+                ["inspect", ..] | ["info", ..] | ["ps", ..] | ["port", ..] => "inspect",
+                ["network", "inspect" | "ls", ..] | ["volume", "inspect" | "ls", ..] => "inspect",
+                ["network", "create", ..] | ["volume", "create", ..] | ["run", ..] => "create",
+                ["rm", ..] | ["network", "rm", ..] | ["volume", "rm", ..] => "remove",
+                ["restart", ..] => "restart",
+                ["exec", ..] => "exec",
+                ["pull", ..] => "pull",
+                _ => "other",
+            }
+        }
+
+        fn docker_operation_label(args: &[&str]) -> &'static str {
+            match args {
+                ["inspect", ..] => "container inspection",
+                ["info", ..] => "daemon inspection",
+                ["ps", ..] => "container listing",
+                ["port", ..] => "listener-port inspection",
+                ["network", "inspect", ..] => "network inspection",
+                ["network", "ls", ..] => "network listing",
+                ["network", "create", ..] => "network creation",
+                ["network", "rm", ..] => "network removal",
+                ["volume", "inspect", ..] => "volume inspection",
+                ["volume", "ls", ..] => "volume listing",
+                ["volume", "create", ..] => "volume creation",
+                ["volume", "rm", ..] => "volume removal",
+                ["run", ..] => "container creation",
+                ["rm", ..] => "container removal",
+                ["restart", ..] => "container restart",
+                ["exec", ..] => "fixture SQL execution",
+                ["pull", ..] => "image pull",
+                _ => "fixture operation",
+            }
         }
         String::from_utf8(output)
             .map(|value| value.trim().to_owned())
@@ -837,6 +1421,21 @@ impl Drop for OracleFixture {
 
 fn fixture_failure(message: &'static str) -> PocFailure {
     PocFailure::new(PocStage::Fixture, PocCategory::Fixture, message)
+}
+
+fn timeout_failure() -> PocFailure {
+    PocFailure::new(
+        PocStage::Fixture,
+        PocCategory::Timeout,
+        "fixture operation timed out",
+    )
+}
+
+fn record_cleanup_failure(slot: &mut Option<PocFailure>, failure: PocFailure) {
+    *slot = Some(match slot.take() {
+        Some(existing) => existing.append_cleanup(failure),
+        None => failure,
+    });
 }
 
 fn cleanup_failure(message: &'static str) -> PocFailure {
@@ -871,6 +1470,7 @@ mod tests {
         let owner = OwnerClaim::acquire(&root).unwrap();
         let journal = OwnershipJournal {
             token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
             container_name: CONTAINER_NAME.to_owned(),
             container_expected: true,
             image: IMAGE.to_owned(),
@@ -882,6 +1482,124 @@ mod tests {
         assert!(fixture.cleanup_inner().is_err());
         assert!(root.join("journal.json").exists());
         assert!(root.join("owner.lock").exists());
+    }
+
+    #[test]
+    fn cleanup_existing_is_idempotent_when_fixture_root_is_absent() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("absent-fixture");
+
+        OracleFixture::cleanup_existing(FixtureConfig {
+            docker_program: PathBuf::from("docker"),
+            docker_host: "fake".to_owned(),
+            root,
+            startup_timeout_seconds: 1,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn cleanup_existing_rejects_a_dangling_fixture_root_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture-link");
+        symlink(directory.path().join("missing-target"), &root).unwrap();
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: PathBuf::from("docker"),
+                docker_host: "fake".to_owned(),
+                root,
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cleanup_existing_rejects_identity_matching_file_outside_fixture_root() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let outside = directory.path().join("outside-secret");
+        std::fs::write(&outside, b"secret").unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            temporary_files: vec![(outside.clone(), FileIdentity::from_path(&outside).unwrap())],
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: PathBuf::from("docker"),
+                docker_host: "fake".to_owned(),
+                root,
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn cleanup_existing_rejects_changed_docker_endpoint() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "unix:///daemon-a.sock".to_owned(),
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: PathBuf::from("docker"),
+                docker_host: "unix:///daemon-b.sock".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
+    }
+
+    #[test]
+    fn cleanup_existing_rejects_changed_docker_daemon_identity() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        write_script(
+            &docker,
+            "#!/bin/sh\nshift 2\nif [ \"$1\" = info ]; then echo daemon-b; fi\n",
+        );
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            docker_daemon_id: "daemon-a".to_owned(),
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
     }
 
     #[test]
@@ -912,6 +1630,7 @@ mod tests {
         let owner = OwnerClaim::acquire(&root).unwrap();
         let journal = OwnershipJournal {
             token: "token".to_owned(),
+            docker_host: "fake".to_owned(),
             container_name: CONTAINER_NAME.to_owned(),
             container_expected: true,
             container_id: "container-id".to_owned(),
@@ -927,6 +1646,932 @@ mod tests {
             std::fs::read_to_string(marker).unwrap().trim(),
             "container-id"
         );
+    }
+
+    #[test]
+    fn cleanup_existing_adopts_unrecorded_owned_container() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let marker = directory.path().join("removed");
+        let docker = directory.path().join("docker-fake");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        write_script(
+            &docker,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo '{}' ;;\n\
+                     *) echo adopted-container-id ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = rm ]; then echo \"$3\" > '{}'; exit 0; fi\n\
+                 exit 0\n",
+                owner.token,
+                marker.display()
+            ),
+        );
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            image: IMAGE.to_owned(),
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        OracleFixture::cleanup_existing(FixtureConfig {
+            docker_program: docker,
+            docker_host: "fake".to_owned(),
+            root: root.clone(),
+            startup_timeout_seconds: 1,
+        })
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(marker).unwrap().trim(),
+            "adopted-container-id"
+        );
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn cleanup_existing_adopts_unrecorded_owned_volume() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let marker = directory.path().join("removed");
+        let docker = directory.path().join("docker-fake");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        write_script(
+            &docker,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = ls ]; then exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = ls ]; then echo {VOLUME_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Labels*) echo '{}' ;;\n\
+                     *) echo 'created|/mount|local' ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = rm ]; then echo \"$3\" > '{}'; exit 0; fi\n\
+                 exit 0\n",
+                owner.token,
+                marker.display()
+            ),
+        );
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            volume_name: VOLUME_NAME.to_owned(),
+            volume_expected: true,
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        OracleFixture::cleanup_existing(FixtureConfig {
+            docker_program: docker,
+            docker_host: "fake".to_owned(),
+            root: root.clone(),
+            startup_timeout_seconds: 1,
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), VOLUME_NAME);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn cleanup_existing_retains_foreign_unrecorded_container() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        write_script(
+            &docker,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo foreign ;;\n\
+                     *) echo foreign-container-id ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 exit 0\n"
+            ),
+        );
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            image: IMAGE.to_owned(),
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
+        assert!(root.join("owner.lock").exists());
+    }
+
+    #[test]
+    fn expired_start_deadline_rolls_back_owner_claim() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        write_script(&docker, "#!/bin/sh\nexit 0\n");
+
+        let failure = match OracleFixture::start_until(
+            FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            },
+            Instant::now(),
+        ) {
+            Ok(_) => panic!("expired fixture deadline unexpectedly succeeded"),
+            Err(failure) => failure,
+        };
+
+        assert_eq!(failure.category(), PocCategory::Timeout);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn expired_lifecycle_deadlines_fail_before_docker_mutation() {
+        for operation in ["restart", "recreate", "replace"] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join("fixture");
+            let docker = directory.path().join("docker-fake");
+            write_script(&docker, "#!/bin/sh\nexit 0\n");
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            let journal = OwnershipJournal {
+                token: "token".to_owned(),
+                docker_host: "fake".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: "container-id".to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            let journal_identity = journal.persist(&root).unwrap();
+            let mut fixture = test_fixture(root, docker, owner, journal, journal_identity);
+
+            let result = match operation {
+                "restart" => fixture.restart_container(Instant::now()),
+                "recreate" => fixture.recreate_container_same_volume(Instant::now()),
+                "replace" => fixture.replace_with_fresh_volume(Instant::now()),
+                _ => unreachable!(),
+            };
+
+            assert_eq!(result.unwrap_err().category(), PocCategory::Timeout);
+        }
+    }
+
+    #[test]
+    fn cleanup_existing_accepts_interruption_before_or_after_identity_clear() {
+        for (container_id, volume_identity) in
+            [("old-container", "old-volume|/mount|local"), ("", "")]
+        {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join("fixture");
+            let docker = directory.path().join("docker-fake");
+            write_script(&docker, "#!/bin/sh\nshift 2\nexit 0\n");
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            let journal = OwnershipJournal {
+                token: owner.token.clone(),
+                docker_host: "fake".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: container_id.to_owned(),
+                image: IMAGE.to_owned(),
+                volume_name: VOLUME_NAME.to_owned(),
+                volume_expected: true,
+                volume_identity: volume_identity.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            journal.persist(&root).unwrap();
+            drop(owner);
+
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .unwrap();
+            assert!(!root.exists());
+        }
+    }
+
+    #[test]
+    fn cleanup_existing_recovers_lifecycle_interruption_matrix() {
+        struct Case {
+            name: &'static str,
+            journal_container_id: &'static str,
+            current_container_id: Option<&'static str>,
+            journal_volume_identity: &'static str,
+            current_volume_identity: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "restart_before_or_after_command",
+                journal_container_id: "container-old",
+                current_container_id: Some("container-old"),
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_old_container_absence",
+                journal_container_id: "container-old",
+                current_container_id: None,
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_container_identity_clear",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_unrecorded_container_creation",
+                journal_container_id: "",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_recorded_container_creation",
+                journal_container_id: "container-new",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "replace_after_old_volume_absence",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: None,
+            },
+            Case {
+                name: "replace_after_volume_identity_clear",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "",
+                current_volume_identity: None,
+            },
+            Case {
+                name: "replace_after_unrecorded_volume_creation",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "",
+                current_volume_identity: Some("volume-new|/mount-new|local"),
+            },
+            Case {
+                name: "replace_after_unrecorded_container_creation",
+                journal_container_id: "",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-new|/mount-new|local",
+                current_volume_identity: Some("volume-new|/mount-new|local"),
+            },
+            Case {
+                name: "replace_after_recorded_container_creation",
+                journal_container_id: "container-new",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-new|/mount-new|local",
+                current_volume_identity: Some("volume-new|/mount-new|local"),
+            },
+        ];
+
+        for case in cases {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join(case.name);
+            let docker = directory.path().join(format!("docker-{}", case.name));
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            write_interruption_state_script(
+                &docker,
+                &owner.token,
+                case.current_container_id,
+                case.current_volume_identity,
+            );
+            let journal = OwnershipJournal {
+                token: owner.token.clone(),
+                docker_host: "fake".to_owned(),
+                network_name: NETWORK_NAME.to_owned(),
+                network_expected: true,
+                network_id: "network-id".to_owned(),
+                volume_name: VOLUME_NAME.to_owned(),
+                volume_expected: true,
+                volume_identity: case.journal_volume_identity.to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: case.journal_container_id.to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            journal.persist(&root).unwrap();
+            drop(owner);
+
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .unwrap_or_else(|failure| panic!("{}: {failure}", case.name));
+
+            assert!(!root.exists(), "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn cleanup_existing_waits_for_late_ambiguous_container_creation() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        let count = directory.path().join("ps-count");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        write_script(
+            &docker,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then\n\
+                   n=0; [ -f '{}' ] && n=$(cat '{}'); n=$((n + 1)); echo \"$n\" > '{}'\n\
+                   [ \"$n\" -ge 2 ] && echo {CONTAINER_NAME}\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo '{}' ;;\n\
+                     *) echo late-container-id ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = rm ]; then exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = ls ]; then exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = ls ]; then exit 0; fi\n\
+                 exit 0\n",
+                count.display(),
+                count.display(),
+                count.display(),
+                owner.token,
+            ),
+        );
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            mutation_ambiguous: true,
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            image: IMAGE.to_owned(),
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+        drop(owner);
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
+    }
+
+    #[test]
+    fn same_process_cleanup_retains_ambiguous_mutation_for_recovery() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        write_script(
+            &docker,
+            "#!/bin/sh\nshift 2\nif [ \"$1\" = ps ]; then exit 0; fi\nif [ \"$1\" = network ] && [ \"$2\" = ls ]; then exit 0; fi\nif [ \"$1\" = volume ] && [ \"$2\" = ls ]; then exit 0; fi\nexit 0\n",
+        );
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            mutation_ambiguous: true,
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            image: IMAGE.to_owned(),
+            ..OwnershipJournal::default()
+        };
+        let journal_identity = journal.persist(&root).unwrap();
+        let mut fixture = test_fixture(
+            root.clone(),
+            docker.clone(),
+            owner,
+            journal,
+            journal_identity,
+        );
+        fixture.cleanup_attempted = false;
+
+        assert!(
+            fixture
+                .cleanup_until(Instant::now() + Duration::from_secs(5))
+                .is_err()
+        );
+        assert!(root.join("journal.json").exists());
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
+        assert!(root.join("journal.json").exists());
+    }
+
+    #[test]
+    fn real_lifecycle_failpoints_publish_recoverable_journal_states() {
+        for (operation, failpoint) in [
+            (
+                "recreate-before-clear",
+                LifecycleFailpoint::ContainerRemovedBeforeClear,
+            ),
+            (
+                "recreate-after-clear",
+                LifecycleFailpoint::ContainerClearedBeforeCreate,
+            ),
+            (
+                "replace-before-volume-clear",
+                LifecycleFailpoint::VolumeRemovedBeforeClear,
+            ),
+            (
+                "replace-after-volume-clear",
+                LifecycleFailpoint::VolumeClearedBeforeCreate,
+            ),
+            (
+                "replace-after-volume-create",
+                LifecycleFailpoint::VolumeCreatedBeforeIdentityPublication,
+            ),
+            (
+                "replace-after-volume-publish",
+                LifecycleFailpoint::VolumeIdentityPublished,
+            ),
+            (
+                "recreate-after-container-create",
+                LifecycleFailpoint::ContainerCreatedBeforeIdentityPublication,
+            ),
+            (
+                "recreate-after-container-publish",
+                LifecycleFailpoint::ContainerIdentityPublished,
+            ),
+        ] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join(operation);
+            let docker = directory.path().join(format!("docker-{operation}"));
+            let container_state = directory.path().join(format!("{operation}-container"));
+            let volume_state = directory.path().join(format!("{operation}-volume"));
+            std::fs::write(&container_state, b"container-id").unwrap();
+            std::fs::write(&volume_state, b"present").unwrap();
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            let credentials = FixtureCredentials::create(&root).unwrap();
+            write_lifecycle_state_script(&docker, &container_state, &volume_state, &owner.token);
+            let journal = OwnershipJournal {
+                token: owner.token.clone(),
+                docker_host: "fake".to_owned(),
+                network_name: NETWORK_NAME.to_owned(),
+                network_expected: true,
+                network_id: "network-id".to_owned(),
+                volume_name: VOLUME_NAME.to_owned(),
+                volume_expected: true,
+                volume_identity: "created|/mount|local".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: "container-id".to_owned(),
+                image: IMAGE.to_owned(),
+                host_port: 15_221,
+                username_file: Some((
+                    credentials.username_file.clone(),
+                    credentials.username_identity,
+                )),
+                password_file: Some((
+                    credentials.password_file.clone(),
+                    credentials.password_identity,
+                )),
+                admin_env_file: Some((
+                    credentials.admin_env_file.clone(),
+                    credentials.admin_env_identity,
+                )),
+                ..OwnershipJournal::default()
+            };
+            let journal_identity = journal.persist(&root).unwrap();
+            let mut fixture = test_fixture(
+                root.clone(),
+                docker.clone(),
+                owner,
+                journal,
+                journal_identity,
+            );
+            fixture.credentials = Some(credentials);
+            fixture.lifecycle_failpoint.set(Some(failpoint));
+            fixture.cleanup_attempted = true;
+
+            let result = if operation.starts_with("recreate") {
+                fixture.recreate_container_same_volume(Instant::now() + Duration::from_secs(5))
+            } else {
+                fixture.replace_with_fresh_volume(Instant::now() + Duration::from_secs(5))
+            };
+            assert!(result.is_err(), "{operation}");
+            drop(fixture);
+
+            let cleanup = OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            });
+            if matches!(
+                failpoint,
+                LifecycleFailpoint::VolumeCreatedBeforeIdentityPublication
+                    | LifecycleFailpoint::ContainerCreatedBeforeIdentityPublication
+            ) {
+                assert!(cleanup.is_err(), "{operation}");
+                assert!(root.join("journal.json").exists(), "{operation}");
+            } else {
+                cleanup.unwrap_or_else(|failure| panic!("{operation}: {failure}"));
+                assert!(!root.exists(), "{operation}");
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_existing_retains_container_identity_label_and_image_mismatches() {
+        for (current_id, current_label, current_image) in [
+            ("foreign-id", "token", IMAGE),
+            ("container-id", "foreign", IMAGE),
+            ("container-id", "token", "foreign-image"),
+        ] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join("fixture");
+            let docker = directory.path().join("docker-fake");
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            let token = owner.token.clone();
+            write_script(
+                &docker,
+                &format!(
+                    "#!/bin/sh\n\
+                     shift 2\n\
+                     if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                     if [ \"$1\" = inspect ]; then\n\
+                       case \"$*\" in\n\
+                         *Config.Image*) echo '{current_image}' ;;\n\
+                         *Config.Labels*) echo '{current_label}' ;;\n\
+                         *) echo '{current_id}' ;;\n\
+                       esac\n\
+                       exit 0\n\
+                     fi\n\
+                     exit 0\n"
+                )
+                .replace("echo 'token'", &format!("echo '{token}'")),
+            );
+            let journal = OwnershipJournal {
+                token,
+                docker_host: "fake".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: "container-id".to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            journal.persist(&root).unwrap();
+            drop(owner);
+
+            assert!(
+                OracleFixture::cleanup_existing(FixtureConfig {
+                    docker_program: docker,
+                    docker_host: "fake".to_owned(),
+                    root: root.clone(),
+                    startup_timeout_seconds: 1,
+                })
+                .is_err()
+            );
+            assert!(root.join("journal.json").exists());
+        }
+    }
+
+    #[test]
+    fn cleanup_existing_retains_foreign_network_and_volume() {
+        for kind in ["network", "volume"] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join("fixture");
+            let docker = directory.path().join("docker-fake");
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            write_script(
+                &docker,
+                &format!(
+                    "#!/bin/sh\n\
+                     shift 2\n\
+                     if [ \"$1\" = ps ]; then exit 0; fi\n\
+                     if [ \"$1\" = network ] && [ \"$2\" = ls ]; then [ '{kind}' = network ] && echo {NETWORK_NAME}; exit 0; fi\n\
+                     if [ \"$1\" = network ] && [ \"$2\" = inspect ]; then\n\
+                       case \"$*\" in *Labels*) echo foreign ;; *) echo network-id ;; esac; exit 0\n\
+                     fi\n\
+                     if [ \"$1\" = volume ] && [ \"$2\" = ls ]; then [ '{kind}' = volume ] && echo {VOLUME_NAME}; exit 0; fi\n\
+                     if [ \"$1\" = volume ] && [ \"$2\" = inspect ]; then\n\
+                       case \"$*\" in *Labels*) echo foreign ;; *) echo 'created|/mount|local' ;; esac; exit 0\n\
+                     fi\n\
+                     exit 0\n"
+                ),
+            );
+            let journal = OwnershipJournal {
+                token: owner.token.clone(),
+                docker_host: "fake".to_owned(),
+                network_name: NETWORK_NAME.to_owned(),
+                network_expected: kind == "network",
+                network_id: "network-id".to_owned(),
+                volume_name: VOLUME_NAME.to_owned(),
+                volume_expected: kind == "volume",
+                volume_identity: "created|/mount|local".to_owned(),
+                ..OwnershipJournal::default()
+            };
+            journal.persist(&root).unwrap();
+            drop(owner);
+
+            assert!(
+                OracleFixture::cleanup_existing(FixtureConfig {
+                    docker_program: docker,
+                    docker_host: "fake".to_owned(),
+                    root: root.clone(),
+                    startup_timeout_seconds: 1,
+                })
+                .is_err()
+            );
+            assert!(root.join("journal.json").exists());
+        }
+    }
+
+    #[test]
+    fn lifecycle_deadline_exhaustion_preserves_journal_then_allows_cleanup() {
+        for operation in ["restart", "recreate", "replace"] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join(operation);
+            let docker = directory.path().join(format!("docker-{operation}"));
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            write_script(
+                &docker,
+                &format!(
+                    "#!/bin/sh\n\
+                     shift 2\n\
+                     if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                     if [ \"$1\" = inspect ]; then\n\
+                       sleep 0.2\n\
+                       case \"$*\" in\n\
+                         *Config.Image*) echo '{IMAGE}' ;;\n\
+                         *Config.Labels*) echo token ;;\n\
+                         *) echo container-id ;;\n\
+                       esac\n\
+                       exit 0\n\
+                     fi\n\
+                     if [ \"$1\" = rm ]; then exit 0; fi\n\
+                     exit 0\n"
+                ),
+            );
+            let journal = OwnershipJournal {
+                token: "token".to_owned(),
+                docker_host: "fake".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: "container-id".to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            let journal_identity = journal.persist(&root).unwrap();
+            let mut fixture = test_fixture(root.clone(), docker, owner, journal, journal_identity);
+            fixture.cleanup_attempted = false;
+            let deadline = Instant::now() + Duration::from_millis(40);
+
+            let result = match operation {
+                "restart" => fixture.restart_container(deadline),
+                "recreate" => fixture.recreate_container_same_volume(deadline),
+                "replace" => fixture.replace_with_fresh_volume(deadline),
+                _ => unreachable!(),
+            };
+
+            assert_eq!(result.unwrap_err().category(), PocCategory::Timeout);
+            assert!(root.join("journal.json").exists());
+            fixture.cleanup().unwrap();
+            assert!(!root.exists());
+        }
+    }
+
+    #[test]
+    fn cleanup_deadline_overrides_expired_operation_and_retains_on_expiry() {
+        for cleanup_millis in [1_000u64, 40u64] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join(format!("cleanup-{cleanup_millis}"));
+            let docker = directory.path().join(format!("docker-{cleanup_millis}"));
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            write_script(
+                &docker,
+                &format!(
+                    "#!/bin/sh\n\
+                     shift 2\n\
+                     if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                     if [ \"$1\" = inspect ]; then\n\
+                       sleep 0.2\n\
+                       case \"$*\" in\n\
+                         *Config.Image*) echo '{IMAGE}' ;;\n\
+                         *Config.Labels*) echo '{}' ;;\n\
+                         *) echo container-id ;;\n\
+                       esac\n\
+                       exit 0\n\
+                     fi\n\
+                     if [ \"$1\" = rm ]; then exit 0; fi\n\
+                     exit 0\n",
+                    owner.token
+                ),
+            );
+            let journal = OwnershipJournal {
+                token: owner.token.clone(),
+                docker_host: "fake".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: "container-id".to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            let journal_identity = journal.persist(&root).unwrap();
+            let mut fixture = test_fixture(
+                root.clone(),
+                docker.clone(),
+                owner,
+                journal,
+                journal_identity,
+            );
+            fixture.operation_deadline.set(Some(Instant::now()));
+            fixture.cleanup_attempted = false;
+
+            let result =
+                fixture.cleanup_until(Instant::now() + Duration::from_millis(cleanup_millis));
+            if cleanup_millis == 1_000 {
+                result.unwrap();
+                assert!(!root.exists());
+            } else {
+                assert_eq!(result.unwrap_err().category(), PocCategory::Timeout);
+                assert!(root.join("journal.json").exists());
+                OracleFixture::cleanup_existing(FixtureConfig {
+                    docker_program: docker,
+                    docker_host: "fake".to_owned(),
+                    root: root.clone(),
+                    startup_timeout_seconds: 1,
+                })
+                .unwrap();
+                assert!(!root.exists());
+            }
+        }
+    }
+
+    #[test]
+    fn resource_evidence_revalidates_container_volume_and_network() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        write_resource_inspection_script(&docker, VOLUME_NAME);
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: "token".to_owned(),
+            docker_host: "fake".to_owned(),
+            network_name: NETWORK_NAME.to_owned(),
+            network_expected: true,
+            network_id: "network-id".to_owned(),
+            volume_name: VOLUME_NAME.to_owned(),
+            volume_expected: true,
+            volume_identity: "created|/mount|local".to_owned(),
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            container_id: "container-id".to_owned(),
+            image: IMAGE.to_owned(),
+            host_port: 15_221,
+            ..OwnershipJournal::default()
+        };
+        let journal_identity = journal.persist(&root).unwrap();
+        let mut fixture = test_fixture(root, docker, owner, journal, journal_identity);
+
+        let evidence = fixture.resource_evidence().unwrap();
+
+        assert_eq!(evidence.container_id, "container-id");
+        assert_eq!(evidence.container_owner_label, "token");
+        assert_eq!(evidence.network_id, "network-id");
+        assert_eq!(evidence.network_owner_label, "token");
+        assert_eq!(evidence.attached_network_id, "network-id");
+        assert_eq!(evidence.volume_identity, "created|/mount|local");
+        assert_eq!(evidence.volume_name, VOLUME_NAME);
+        assert_eq!(evidence.volume_owner_label, "token");
+        assert_eq!(evidence.host_port, 15_221);
+    }
+
+    #[test]
+    fn resource_evidence_rejects_replaced_volume_attachment() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fake");
+        write_resource_inspection_script(&docker, "foreign-volume");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: "token".to_owned(),
+            docker_host: "fake".to_owned(),
+            network_name: NETWORK_NAME.to_owned(),
+            network_expected: true,
+            network_id: "network-id".to_owned(),
+            volume_name: VOLUME_NAME.to_owned(),
+            volume_expected: true,
+            volume_identity: "created|/mount|local".to_owned(),
+            container_name: CONTAINER_NAME.to_owned(),
+            container_expected: true,
+            container_id: "container-id".to_owned(),
+            image: IMAGE.to_owned(),
+            host_port: 15_221,
+            ..OwnershipJournal::default()
+        };
+        let journal_identity = journal.persist(&root).unwrap();
+        let mut fixture = test_fixture(root, docker, owner, journal, journal_identity);
+
+        assert!(fixture.resource_evidence().is_err());
+    }
+
+    #[test]
+    fn docker_failures_identify_sanitized_operation_class() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let docker = directory.path().join("docker-fail");
+        write_script(&docker, "#!/bin/sh\nexit 1\n");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let journal = OwnershipJournal {
+            token: owner.token.clone(),
+            docker_host: "fake".to_owned(),
+            ..OwnershipJournal::default()
+        };
+        let journal_identity = journal.persist(&root).unwrap();
+        let fixture = test_fixture(root, docker, owner, journal, journal_identity);
+
+        let inspection = fixture
+            .docker(&["inspect", CONTAINER_NAME, "--format", "{{.Id}}"])
+            .unwrap_err()
+            .to_string();
+        let removal = fixture
+            .docker(&["rm", "-f", "container-id"])
+            .unwrap_err()
+            .to_string();
+
+        assert!(inspection.contains("Docker container inspection failed with exit status 1"));
+        assert!(removal.contains("Docker container removal failed with exit status 1"));
+    }
+
+    #[test]
+    fn cleanup_failure_summary_preserves_multiple_steps() {
+        let mut failure = None;
+        record_cleanup_failure(
+            &mut failure,
+            cleanup_failure("connection trace could not be removed"),
+        );
+        record_cleanup_failure(
+            &mut failure,
+            cleanup_failure("owned container could not be removed"),
+        );
+
+        let rendered = failure.unwrap().to_string();
+        assert!(rendered.contains("connection trace could not be removed"));
+        assert!(rendered.contains("owned container could not be removed"));
     }
 
     fn test_fixture(
@@ -949,7 +2594,10 @@ mod tests {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            database_incarnation: None,
             trace_identity: Cell::new(None),
+            operation_deadline: Cell::new(None),
+            lifecycle_failpoint: Cell::new(None),
             cleanup_attempted: true,
         }
     }
@@ -957,5 +2605,135 @@ mod tests {
     fn write_script(path: &Path, contents: &str) {
         std::fs::write(path, contents).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    fn write_interruption_state_script(
+        path: &Path,
+        token: &str,
+        container_id: Option<&str>,
+        volume_identity: Option<&str>,
+    ) {
+        let container_present = if container_id.is_some() { "yes" } else { "no" };
+        let container_id = container_id.unwrap_or("");
+        let volume_present = if volume_identity.is_some() {
+            "yes"
+        } else {
+            "no"
+        };
+        let volume_identity = volume_identity.unwrap_or("");
+        write_script(
+            path,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then [ '{container_present}' = yes ] && echo {CONTAINER_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo '{token}' ;;\n\
+                     *Mounts*) echo '{VOLUME_NAME}' ;;\n\
+                     *NetworkSettings*) echo network-id ;;\n\
+                     *) echo '{container_id}' ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = rm ]; then exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = ls ]; then echo {NETWORK_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in *Labels*) echo '{token}' ;; *) echo network-id ;; esac; exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = rm ]; then exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = ls ]; then [ '{volume_present}' = yes ] && echo {VOLUME_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in *Labels*) echo '{token}' ;; *) echo '{volume_identity}' ;; esac; exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = rm ]; then exit 0; fi\n\
+                 exit 0\n"
+            ),
+        );
+    }
+
+    fn write_resource_inspection_script(path: &Path, mounted_volume: &str) {
+        write_script(
+            path,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo token ;;\n\
+                     *Mounts*) echo '{mounted_volume}' ;;\n\
+                     *NetworkSettings*) echo network-id ;;\n\
+                     *) echo container-id ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Labels*) echo token ;;\n\
+                     *) echo network-id ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Labels*) echo token ;;\n\
+                     *) echo 'created|/mount|local' ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = port ]; then echo '127.0.0.1:15221'; exit 0; fi\n\
+                 exit 0\n"
+            ),
+        );
+    }
+
+    fn write_lifecycle_state_script(
+        path: &Path,
+        container_state: &Path,
+        volume_state: &Path,
+        token: &str,
+    ) {
+        write_script(
+            path,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then [ -f '{}' ] && echo {CONTAINER_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo '{token}' ;;\n\
+                     *Mounts*) echo '{VOLUME_NAME}' ;;\n\
+                     *NetworkSettings*) echo network-id ;;\n\
+                     *) cat '{}' ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = rm ]; then rm -f '{}'; exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = ls ]; then echo {NETWORK_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in *Labels*) echo '{token}' ;; *) echo network-id ;; esac; exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = rm ]; then exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = ls ]; then [ -f '{}' ] && echo {VOLUME_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in *Labels*) echo '{token}' ;; *) echo 'created|/mount|local' ;; esac; exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = create ]; then touch '{}'; echo {VOLUME_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = rm ]; then rm -f '{}'; exit 0; fi\n\
+                 if [ \"$1\" = run ]; then echo container-new > '{}'; echo container-new; exit 0; fi\n\
+                 if [ \"$1\" = port ]; then echo '127.0.0.1:15221'; exit 0; fi\n\
+                 exit 0\n",
+                container_state.display(),
+                container_state.display(),
+                container_state.display(),
+                volume_state.display(),
+                volume_state.display(),
+                volume_state.display(),
+                container_state.display(),
+            ),
+        );
     }
 }

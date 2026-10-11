@@ -4,4 +4,4 @@ mod owner;
 mod runtime;
 
 pub use config::FixtureConfig;
-pub use runtime::OracleFixture;
+pub use runtime::{FixtureResourceEvidence, OracleFixture};

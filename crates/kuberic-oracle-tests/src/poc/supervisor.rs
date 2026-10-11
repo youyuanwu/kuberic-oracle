@@ -141,9 +141,11 @@ fn run_worker_internal(
             PocStage::SecretRead,
             PocStage::Connect,
             PocStage::QueryIdentityBefore,
+            PocStage::QueryIncarnationBefore,
             PocStage::QueryDatabase,
             PocStage::QueryInstance,
             PocStage::QueryProduct,
+            PocStage::QueryIncarnationAfter,
             PocStage::QueryIdentityAfter,
             PocStage::ParseAdmission,
             PocStage::Close,
@@ -542,9 +544,11 @@ fn deadline_for_stage(
     let budget = match stage {
         PocStage::Connect => timeouts.connect_millis,
         PocStage::QueryIdentityBefore
+        | PocStage::QueryIncarnationBefore
         | PocStage::QueryDatabase
         | PocStage::QueryInstance
         | PocStage::QueryProduct
+        | PocStage::QueryIncarnationAfter
         | PocStage::QueryIdentityAfter => timeouts.query_millis,
         PocStage::Close => timeouts.shutdown_millis,
         _ => snapshot_deadline

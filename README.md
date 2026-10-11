@@ -12,16 +12,18 @@ test-only live proof:
 
 - digest-pinned image-reference syntax validation;
 - explicit standalone and Data Guard deployment profiles;
-- Oracle database, instance, initial lineage-evidence, role, open-mode, and SCN
-  types;
+- separate Oracle database identity, current-incarnation/resetlogs lineage,
+  instance-restart, role, open-mode, and exact SCN types;
 - validated credential/trust-file references, multitenant row scope, bounded
   observer deadlines, and independent polling cadence;
-- driver-independent parsing of bracketed database, instance, and product rows,
-  including nullable `CURRENT_SCN` and exact supported logging values;
+- driver-independent parsing of bracketed identity, current-incarnation,
+  database, instance, and product rows, including nullable `CURRENT_SCN` and
+  exact supported logging values;
 - fail-closed observation admission for identity, freshness, edition, version,
   and the currently modeled role, logging, and open-mode subset; and
 - a pure-Rust, process-isolated Oracle Free live test with exact image,
-  least-privilege, row-count, failure, and cleanup checks.
+  least-privilege, row-count, restart, same-volume recreation, fresh-volume
+  clone-ambiguity, failure, recovery, and cleanup checks.
 
 Production code still does **not** connect to Oracle, read credentials, launch
 containers, publish Kuberic progress, configure Data Guard, or perform role
@@ -61,7 +63,8 @@ Containers are required for the initial repository profile because:
   production adapter code Docker authority.
 
 Containers do not add Oracle Data Guard to Free edition. A Free container is
-therefore a standalone database member, not a physical standby.
+therefore a standalone, observe-only, non-electable database member, not a
+physical standby.
 
 Oracle Free is an evaluation target, not a capacity or patching analogue for a
 production Enterprise deployment. Oracle documents limits including two
@@ -74,7 +77,7 @@ security patches. See the
 
 | Profile | Edition | Replicas | Replication | Current status |
 |---|---|---:|---|---|
-| `standalone` | Oracle AI Database Free | 1 | None | Contract + test-only live PoC |
+| `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + test-only live proof |
 | `standalone` | Enterprise Developer/Enterprise | 1 | None | Contract implemented |
 | `data_guard_physical` | Enterprise Developer/Enterprise | 3 | Oracle Data Guard | Contract only |
 
@@ -138,9 +141,18 @@ including the live proof. Setting
 The live proof requires Linux x86-64, Docker, `strace`, sufficient image
 storage, the pinned Linux image digest, and one local `FREEPDB1` observer. It
 uses Oracle's pure-Rust `oracledb` beta without Instant Client. The fixture
-publishes the listener on host loopback only, verifies worker connection
-destinations, runs positive/authentication/authorization cases serially, and
-removes only identity-matched owned resources.
+accepts only a normalized absolute local Unix Docker socket, binds recovery to
+that endpoint, publishes the listener on host loopback only, verifies worker connection
+destinations, runs positive/authentication/authorization cases serially,
+brackets the current whole-database incarnation, proves instance restart and
+same-volume container recreation separately, and removes only
+identity-matched owned resources.
+
+The pinned image seeds a fresh owned volume with the same DBID and current
+incarnation evidence. The live proof therefore records changed fixture
+container/volume identity as a clone ambiguity and confirms the new generation
+through the restricted one-shot observer; it does not claim that Oracle-native
+observation can reject that clone as a different database.
 
 This plaintext PoC does not establish the production transport design. A future
 production observer must connect to an already provisioned database with a
@@ -152,6 +164,8 @@ The initial profile does not provide:
 
 - Oracle Data Guard on Free edition;
 - automatic failover, switchover, promotion, or broker mutation;
+- election, role/configuration mutation, catch-up, build/copy, data-loss, or
+  client-service routing behavior;
 - RAC, sharding, GoldenGate, or application-level logical replication;
 - Kubernetes manifests or an Oracle operator;
 - a production deployment guide; or

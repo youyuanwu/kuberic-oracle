@@ -35,6 +35,7 @@ fn request() -> ObservationRequest {
             },
             container_data: ContainerDataPolicy::NotApplicable,
             expected_database_rows: 1,
+            expected_incarnation_rows: 1,
             expected_instance_rows: 1,
             expected_product_rows: 1,
         },
@@ -46,6 +47,9 @@ fn request() -> ObservationRequest {
         },
         target_database_id: DatabaseId::new(42).unwrap().value(),
         target_database_unique_name: "FREE".to_owned(),
+        target_incarnation_number: 3,
+        target_resetlogs_id: 123_456_789,
+        target_resetlogs_change: "100".to_owned(),
         maximum_age_millis: 500,
     }
 }

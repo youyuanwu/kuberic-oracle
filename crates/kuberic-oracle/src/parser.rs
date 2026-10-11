@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging,
+    ContractError, DatabaseId, DatabaseIncarnationIdentity, DatabaseIncarnationSnapshot,
+    DatabaseIncarnationStatus, DatabaseRole, DatabaseSnapshot, DecimalScn, ForceLogging,
     InstanceSnapshot, LogMode, NativeEdition, NativeName, OpenMode, OracleObservation,
     ProductSnapshot,
 };
@@ -15,6 +16,9 @@ pub struct RawObservationIdentity {
     pub database_unique_name: String,
     pub instance_name: String,
     pub startup_time: String,
+    pub incarnation_number: String,
+    pub resetlogs_id: String,
+    pub resetlogs_change: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +35,20 @@ pub struct RawDatabaseRow {
     pub log_mode: String,
     pub force_logging: String,
     pub cdb: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawDatabaseIncarnationRow {
+    pub incarnation_number: String,
+    pub resetlogs_change: String,
+    pub resetlogs_time: String,
+    pub prior_resetlogs_change: String,
+    pub prior_resetlogs_time: Option<String>,
+    pub status: String,
+    pub resetlogs_id: String,
+    pub prior_incarnation_number: String,
+    pub container_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,9 +76,11 @@ pub struct RawProductRow {
 #[serde(deny_unknown_fields)]
 pub struct RawObservationRows {
     pub before: RawObservationIdentity,
+    pub incarnation_before: RawDatabaseIncarnationRow,
     pub database: RawDatabaseRow,
     pub instance: RawInstanceRow,
     pub product: RawProductRow,
+    pub incarnation_after: RawDatabaseIncarnationRow,
     pub after: RawObservationIdentity,
 }
 
@@ -70,8 +90,13 @@ pub fn parse_observation_rows(
 ) -> Result<OracleObservation, ContractError> {
     let before = parse_identity(rows.before)?;
     let after = parse_identity(rows.after)?;
+    let incarnation_before = parse_incarnation(rows.incarnation_before)?;
+    let incarnation_after = parse_incarnation(rows.incarnation_after)?;
 
-    if before != after {
+    if before != after
+        || incarnation_before != incarnation_after
+        || before.incarnation != incarnation_before.identity
+    {
         return Err(ContractError::ObservationIdentityChanged);
     }
 
@@ -83,6 +108,7 @@ pub fn parse_observation_rows(
         || database.database_unique_name != before.database_unique_name
         || instance.instance_name != before.instance_name
         || instance.startup_time != before.startup_time
+        || database.resetlogs_change != incarnation_before.identity.resetlogs_change
     {
         return Err(ContractError::ObservationIdentityChanged);
     }
@@ -95,6 +121,7 @@ pub fn parse_observation_rows(
     Ok(OracleObservation {
         observed_at_unix_millis,
         database,
+        incarnation: incarnation_before,
         instance,
         product,
     })
@@ -106,6 +133,7 @@ struct ParsedIdentity {
     database_unique_name: NativeName,
     instance_name: NativeName,
     startup_time: String,
+    incarnation: DatabaseIncarnationIdentity,
 }
 
 fn parse_identity(row: RawObservationIdentity) -> Result<ParsedIdentity, ContractError> {
@@ -114,6 +142,11 @@ fn parse_identity(row: RawObservationIdentity) -> Result<ParsedIdentity, Contrac
         database_unique_name: NativeName::new("database_unique_name", row.database_unique_name)?,
         instance_name: NativeName::new("instance_name", row.instance_name)?,
         startup_time: parse_text("startup_time", row.startup_time)?,
+        incarnation: DatabaseIncarnationIdentity {
+            incarnation_number: parse_positive_u64("incarnation_number", &row.incarnation_number)?,
+            resetlogs_id: parse_positive_u64("resetlogs_id", &row.resetlogs_id)?,
+            resetlogs_change: DecimalScn::parse(&row.resetlogs_change)?,
+        },
     })
 }
 
@@ -135,6 +168,90 @@ fn parse_database(row: RawDatabaseRow) -> Result<DatabaseSnapshot, ContractError
         force_logging: parse_force_logging(&row.force_logging)?,
         is_container_database: parse_yes_no("cdb", &row.cdb)?,
     })
+}
+
+fn parse_incarnation(
+    row: RawDatabaseIncarnationRow,
+) -> Result<DatabaseIncarnationSnapshot, ContractError> {
+    let incarnation_number = parse_positive_u64("incarnation_number", &row.incarnation_number)?;
+    let resetlogs_id = parse_positive_u64("resetlogs_id", &row.resetlogs_id)?;
+    let prior_incarnation_number =
+        parse_u64("prior_incarnation_number", &row.prior_incarnation_number)?;
+    let container_id = parse_u64("container_id", &row.container_id)?;
+    if container_id != 0 {
+        return Err(unsupported("container_id", &row.container_id));
+    }
+    let status = match row.status.as_str() {
+        "CURRENT" => DatabaseIncarnationStatus::Current,
+        _ => return Err(unsupported("incarnation_status", &row.status)),
+    };
+    let resetlogs_time = parse_oracle_date_text("resetlogs_time", row.resetlogs_time)?;
+    let prior_resetlogs_time = row
+        .prior_resetlogs_time
+        .map(|value| parse_oracle_date_text("prior_resetlogs_time", value))
+        .transpose()?;
+    if prior_incarnation_number != 0 && prior_resetlogs_time.is_none() {
+        return Err(ContractError::MissingField {
+            field: "prior_resetlogs_time",
+        });
+    }
+
+    let snapshot = DatabaseIncarnationSnapshot {
+        identity: DatabaseIncarnationIdentity {
+            incarnation_number,
+            resetlogs_id,
+            resetlogs_change: DecimalScn::parse(&row.resetlogs_change)?,
+        },
+        resetlogs_time,
+        prior_resetlogs_change: DecimalScn::parse(&row.prior_resetlogs_change)?,
+        prior_resetlogs_time,
+        prior_incarnation_number,
+        status,
+        container_id,
+    };
+    validate_incarnation_snapshot(&snapshot)?;
+    Ok(snapshot)
+}
+
+pub(crate) fn validate_observation_evidence(
+    observation: &OracleObservation,
+) -> Result<(), ContractError> {
+    validate_incarnation_snapshot(&observation.incarnation)?;
+    if observation.database.resetlogs_change != observation.incarnation.identity.resetlogs_change {
+        return Err(ContractError::ObservationIdentityChanged);
+    }
+    Ok(())
+}
+
+fn validate_incarnation_snapshot(
+    incarnation: &DatabaseIncarnationSnapshot,
+) -> Result<(), ContractError> {
+    if incarnation.identity.incarnation_number == 0 {
+        return Err(ContractError::InvalidUnsignedInteger {
+            field: "incarnation_number",
+        });
+    }
+    if incarnation.identity.resetlogs_id == 0 {
+        return Err(ContractError::InvalidUnsignedInteger {
+            field: "resetlogs_id",
+        });
+    }
+    if incarnation.container_id != 0 {
+        return Err(unsupported(
+            "container_id",
+            &incarnation.container_id.to_string(),
+        ));
+    }
+    parse_oracle_date_text("resetlogs_time", incarnation.resetlogs_time.clone())?;
+    if let Some(prior_time) = &incarnation.prior_resetlogs_time {
+        parse_oracle_date_text("prior_resetlogs_time", prior_time.clone())?;
+    }
+    if incarnation.prior_incarnation_number != 0 && incarnation.prior_resetlogs_time.is_none() {
+        return Err(ContractError::MissingField {
+            field: "prior_resetlogs_time",
+        });
+    }
+    Ok(())
 }
 
 fn parse_instance(row: RawInstanceRow) -> Result<InstanceSnapshot, ContractError> {
@@ -181,6 +298,14 @@ fn parse_u64(field: &'static str, value: &str) -> Result<u64, ContractError> {
     value
         .parse()
         .map_err(|_| ContractError::InvalidUnsignedInteger { field })
+}
+
+fn parse_positive_u64(field: &'static str, value: &str) -> Result<u64, ContractError> {
+    let parsed = parse_u64(field, value)?;
+    if parsed == 0 {
+        return Err(ContractError::InvalidUnsignedInteger { field });
+    }
+    Ok(parsed)
 }
 
 fn parse_major_version(value: &str) -> Result<u16, ContractError> {
@@ -285,6 +410,61 @@ fn parse_text(field: &'static str, value: String) -> Result<String, ContractErro
         return Err(ContractError::InvalidCharacter { field });
     }
     Ok(value)
+}
+
+fn parse_oracle_date_text(field: &'static str, value: String) -> Result<String, ContractError> {
+    let value = parse_text(field, value)?;
+    let bytes = value.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return Err(unsupported(field, &value));
+    }
+
+    let year = parse_date_component(field, bytes, 0, 4)?;
+    let month = parse_date_component(field, bytes, 5, 7)?;
+    let day = parse_date_component(field, bytes, 8, 10)?;
+    let hour = parse_date_component(field, bytes, 11, 13)?;
+    let minute = parse_date_component(field, bytes, 14, 16)?;
+    let second = parse_date_component(field, bytes, 17, 19)?;
+    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let maximum_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return Err(unsupported(field, &value)),
+    };
+    if year == 0 || day == 0 || day > maximum_day || hour > 23 || minute > 59 || second > 59 {
+        return Err(unsupported(field, &value));
+    }
+    Ok(value)
+}
+
+fn parse_date_component(
+    field: &'static str,
+    value: &[u8],
+    start: usize,
+    end: usize,
+) -> Result<u32, ContractError> {
+    let component = &value[start..end];
+    if !component.iter().all(u8::is_ascii_digit) {
+        return Err(ContractError::UnsupportedNativeValue {
+            field,
+            value: String::from_utf8_lossy(value).into_owned(),
+        });
+    }
+    std::str::from_utf8(component)
+        .ok()
+        .and_then(|component| component.parse().ok())
+        .ok_or_else(|| ContractError::UnsupportedNativeValue {
+            field,
+            value: String::from_utf8_lossy(value).into_owned(),
+        })
 }
 
 fn unsupported(field: &'static str, value: &str) -> ContractError {
