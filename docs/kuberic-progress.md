@@ -6,20 +6,27 @@ This document defines the current boundary between Oracle native progress and
 Kuberic's fixed Service Fabric-compatible replication contract.
 
 The repository does not currently publish Oracle progress to Kuberic. It
-defines a snapshot contract and raw-row parser, and an opt-in test-only PoC has
-populated those contracts from one real Oracle Free member. This evidence does
+defines a snapshot contract and raw-row parser, and a test-only PoC has
+populated those contracts from one real Oracle Free member. Repository test
+configuration explicitly authorizes that default live proof; the server-free
+override disables it. This evidence does
 not turn any Oracle number into complete replication or promotion authority.
 
 ## Standalone Free profile
 
 Oracle AI Database Free is initially supported as one standalone `PRIMARY`
-database opened `READ WRITE`.
+database opened `READ WRITE`. It is observe-only and non-electable: the
+repository exposes no promotion, role/configuration, catch-up, build/copy,
+data-loss, or client-routing operation for this profile.
 
 The snapshot contract has fields for:
 
 - `CURRENT_SCN`;
 - `RESETLOGS_CHANGE#`;
 - `ACTIVATION#`;
+- current `V$DATABASE_INCARNATION` record ID;
+- resetlogs ID, change, time, prior-incarnation evidence, status, and
+  whole-database `CON_ID=0` scope;
 - DBID;
 - `DB_UNIQUE_NAME`;
 - database and instance names;
@@ -27,18 +34,24 @@ The snapshot contract has fields for:
 - instance startup time; and
 - Oracle product version and edition.
 
-The server-free parser accepts rows corresponding to the fixed database,
-instance, product, and identity queries. It preserves a `NULL` `CURRENT_SCN`
-for a mounted standby and rejects bracket identity changes and unmodeled native
-logging values. The test-only PoC executes that bracket and independently reads
-`V$INSTANCE.EDITION`, native version 23, and the Oracle AI Database 26ai Free
-product/release evidence. Production still has no live observer.
+The server-free parser accepts rows corresponding to the fixed identity,
+current-incarnation, database, instance, and product queries. It preserves a
+`NULL` `CURRENT_SCN` for a mounted standby and rejects bracket identity or
+lineage changes and unmodeled native logging values. The test-only PoC executes
+that bracket and independently reads `V$INSTANCE.EDITION`, native version 23,
+and the Oracle AI Database 26ai Free product/release evidence. Production still
+has no live observer.
 
 When supplied from a trusted future observer, these fields can support
-identity, freshness, startup-time restart evidence, and health validation. They
-do not represent a complete Oracle database incarnation, Kuberic replica
-incarnation, process session, immutable resource binding, or replicated
-durability.
+database identity, current Oracle incarnation/resetlogs lineage, freshness,
+startup-time restart evidence, and health validation. They do not represent
+Kuberic history context, Kuberic replica incarnation, process/storage
+incarnation, immutable service authority, or replicated durability.
+
+The pinned Oracle Free image seeds a fresh owned volume with the same DBID and
+current-incarnation tuple. The live proof keeps changed container/volume
+identity separate and records the result as an indistinguishable clone; it does
+not convert fixture replacement into an Oracle-native rejection claim.
 
 The standalone profile therefore must not claim:
 
@@ -48,6 +61,8 @@ The standalone profile therefore must not claim:
 - promotion eligibility;
 - build or copy capability;
 - data-loss recovery;
+- configuration mutation;
+- client-service routing;
 - switchover; or
 - failover.
 
@@ -122,6 +137,17 @@ These values are related but not interchangeable.
 When the Kuberic runtime is added, callbacks may validate fresh native identity
 and role evidence. They must not mutate Oracle or fabricate unsupported
 capabilities.
+
+That integration is blocked on Kuberic Phase 5's future public V1
+values/evidence contract. Oracle DBID/current-incarnation/resetlogs/startup/SCN
+evidence is not itself `HistoryContext`, a Kuberic replica incarnation,
+`ReplicatorCapabilities`, or Kuberic progress. Those mappings require the
+future public contract.
+
+Successful future role and lifecycle callbacks cannot be implemented as
+observational no-ops. Public completion is semantic evidence that the exact
+operation-specific postcondition was established; it must not be inferred from
+an unchanged observation or from private ACK/copy/quorum facts.
 
 The left column is behavioral shorthand, not a promise of public Kuberic
 methods with those exact names. Stage 3 must bind each behavior to the actual

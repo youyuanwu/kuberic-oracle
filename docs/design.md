@@ -1,8 +1,9 @@
 # Oracle External-Replication Adapter
 
-> **Status:** Safety contract and server-free observation admission.
-> Database connectivity, container fixtures, Kuberic runtime hosting, Data
-> Guard mutation, and failover effects are not implemented.
+> **Status:** Safety contract, server-free observation admission, and
+> test-only Oracle Free live proof. Production database connectivity, Kuberic
+> runtime hosting, Data Guard mutation, and failover effects are not
+> implemented.
 >
 > **Support level:** Experimental. This is not an Oracle-supported Kubernetes
 > high-availability solution or a production deployment guide.
@@ -115,26 +116,26 @@ The production crate implements:
 - fail-closed rejection of Data Guard with Free edition;
 - exact replica-count contracts for the initial profiles;
 - Oracle DBID, database unique name, role, open mode, a currently supported
-  logging subset, SCN, resetlogs, activation, instance, and initial lineage
-  evidence types;
+  logging subset, SCN, resetlogs, activation, instance, and current
+  whole-database incarnation evidence types;
 - nullable `CURRENT_SCN` representation for mounted-database truth;
 - explicit enabled/disabled force-logging representation;
 - validated credential/trust-file references, multitenant scope, expected row
   counts, bounded deadlines, and independent polling cadence;
 - fixed read-only SQL statements and driver-independent raw-row contracts;
-- bracketed raw-row parsing with database and instance identity stability
-  checks;
+- bracketed raw-row parsing with database, current-incarnation, and instance
+  identity stability checks;
 - fail-closed parsing of supported role, open-mode, logging, Boolean, numeric,
   product-version, and identity values;
 - independently observed native edition and native major version;
 - retained Oracle AI Database product, version, and release evidence;
 - observation freshness and future-time rejection;
-- target DBID and `DB_UNIQUE_NAME` validation;
+- target DBID, `DB_UNIQUE_NAME`, and current-incarnation identity validation;
 - edition and major-version validation;
 - standalone-primary admission; and
 - preliminary physical-primary/standby admission requiring `ARCHIVELOG` and
   `FORCE LOGGING`; and
-- an opt-in test-only live PoC using Oracle's pure-Rust `oracledb`
+- a default-authorized test-only live PoC using Oracle's pure-Rust `oracledb`
   `26.0.0-beta.4`, one disposable worker process, and one owned Oracle Free
   container.
 
@@ -152,6 +153,7 @@ Production code receives:
 - a direct database endpoint, never an unverified generic load balancer;
 - mounted references to an observation username, password, and trust material;
 - expected DBID and `DB_UNIQUE_NAME`;
+- expected current incarnation number, resetlogs ID, and resetlogs change;
 - expected Oracle major version and edition profile;
 - a digest-pinned provisioning image reference; and
 - Kuberic resource, replica, Pod, PVC, and process-session identities when the
@@ -172,21 +174,23 @@ Production code must not:
 
 ### Test fixture
 
-The opt-in PoC fixture owns one Oracle Free container. A later Enterprise
+The default-authorized PoC fixture owns one Oracle Free container. A later Enterprise
 Developer fixture may own three containers only after license handling and Data
 Guard design are reviewed.
 
-Before launch, the fixture must persist desired immutable identities for:
+Before each Docker mutation, the fixture persists creation intent; after
+creation it persists the observed ownership evidence for:
 
 - fixture root;
 - network name and ID;
-- volume name and ID;
+- volume name and revalidated creation/mount/driver identity;
 - container name and ID;
 - image repository, tag, and digest;
 - listener port allocation;
-- database unique name;
-- generated non-secret incarnation ID; and
 - credential and trust-file paths.
+
+DBID, database unique name, and current Oracle incarnation are observed after
+readiness and kept separate from the fixture-resource deletion authority.
 
 Cleanup must reject:
 
@@ -211,6 +215,10 @@ The fixed snapshot reads:
 
 - `V$DATABASE` for DBID, database name, unique name, role, open mode, current
   SCN, resetlogs SCN, activation number, log mode, force logging, and CDB state;
+- `V$DATABASE_INCARNATION` before and after the detailed rows for exactly one
+  `STATUS='CURRENT' AND CON_ID=0` database-incarnation record, including
+  incarnation number, resetlogs ID/change/time, prior-incarnation evidence,
+  status, and container scope;
 - `V$INSTANCE` for instance name, host, version, startup time, instance status,
   and database status; and
 - `PRODUCT_COMPONENT_VERSION` for product and version cross-checking.
@@ -228,10 +236,10 @@ nullability and permit it only for a mounted standby. Primary and open-standby
 admission require a current SCN. Zero, last-known, or other fabricated SCN
 substitutes are prohibited.
 
-The raw-row parser requires stable database and instance identity before and
-after the detailed rows and rejects any change. A future live observer must
-execute that bracket; a SQL transaction is not assumed to make dynamic
-performance views globally atomic.
+The raw-row parser requires stable database, current-incarnation, and instance
+identity before and after the detailed rows and rejects any change. The
+test-only worker executes that bracket; a SQL transaction is not assumed to
+make dynamic performance views globally atomic.
 
 Failures remain classified rather than converted to absence:
 
@@ -257,13 +265,17 @@ The minimum standalone identity is:
 - DBID;
 - `DB_UNIQUE_NAME`;
 - database name;
+- current incarnation number;
+- resetlogs ID and resetlogs change;
 - product major version;
 - instance name;
 - instance startup time; and
 - configured Kuberic replica incarnation.
 
-DBID alone is not sufficient for recovery lineage. Data Guard work must also
-retain and cross-check:
+DBID alone is not sufficient for recovery lineage. The current observation
+therefore retains the whole-database current incarnation separately from
+instance restart evidence. Data Guard work must additionally retain and
+cross-check:
 
 - resetlogs change number;
 - activation number;
@@ -283,11 +295,17 @@ Oracle database incarnation, resetlogs lineage, Kuberic replica incarnation,
 Kuberic process session, and immutable container-resource identity are separate
 evidence domains and must be persisted and cross-checked independently.
 
+The pinned Oracle Free image reproduces its DBID and current-incarnation tuple
+when initialized on a fresh owned volume. Changed container/volume identity is
+therefore fixture evidence, not proof of a different Oracle-native database.
+The adapter does not manufacture divergence with DBID rewriting or database
+creation and does not claim it can reject this clone.
+
 ## Native progress
 
-The Stage 0 snapshot contract can carry `CURRENT_SCN` as an exact
-caller-supplied Oracle native value. No live observer currently populates it,
-and it is not published as Kuberic progress.
+The snapshot contract carries `CURRENT_SCN` as an exact Oracle native value,
+and the test-only live worker populates it. Production does not publish it as
+Kuberic progress.
 
 Reasons include:
 
@@ -396,8 +414,11 @@ Implemented test-only PoC:
 - loopback-only plaintext fixture connection, verified with captured
   `connect(2)` destinations;
 - exact row-count enforcement and fixed-query parsing/admission;
+- exact current-incarnation bracketing and target-lineage admission;
 - independent live edition, native version, and product/release evidence; and
-- positive, wrong-password, removed-grant, privilege-audit, and cleanup proof.
+- positive, wrong-password, removed-grant, privilege-audit, restart,
+  same-volume recreation, fresh-volume clone-ambiguity, deadline, recovery,
+  and cleanup proof.
 
 Interrupted fixtures retain their owner claim and journal. The explicit
 `live-cleanup` path reloads that evidence, distinguishes unavailable Docker
@@ -425,17 +446,27 @@ Implemented for the local PoC:
   audit;
 - positive, authentication, authorization, process-signal, row-scope, and
   cleanup cases; and
+- ownership-safe same-container restart, same-volume container recreation, and
+  fresh-volume generation with revalidated container, volume, mount, network,
+  image, port, and journal evidence;
+- interruption recovery across cleared and unrecorded replacement identities;
+  and
 - an ordinary Rust test enabled by repository Cargo configuration and the
   default local/CI validation path.
 
 Still deferred:
 
 - TCPS fixture provisioning and certificate lifecycle;
-- volume reuse/restart-incarnation testing;
-- production-equivalent transport claims; and
-- automated licensed CI execution.
+- production-equivalent transport claims.
 
 ### Stage 3: Kuberic observe-only runtime
+
+Stage 3 is blocked on Kuberic Phase 5's future public V1 values/evidence
+contract. Oracle DBID/incarnation/resetlogs/startup/SCN evidence is not itself
+Kuberic `HistoryContext`, replica incarnation, `ReplicatorCapabilities`, or
+progress. Successful future role or lifecycle callbacks cannot be
+observational no-ops: public completion is semantic evidence of the exact
+operation's postcondition.
 
 - host one already provisioned Oracle member through Kuberic's public process
   boundary;
@@ -505,3 +536,7 @@ The initial implementation excludes:
 - [Oracle Technology Network License Agreement](https://www.oracle.com/downloads/licenses/standard-license.html)
 - [Kuberic PostgreSQL design](https://github.com/youyuanwu/kuberic/blob/main/docs/features/postgres/design.md)
 - [Kuberic MSSQL design](https://github.com/youyuanwu/kuberic-mssql/blob/main/docs/design.md)
+- [Kuberic Service Fabric API semantics](https://github.com/youyuanwu/kuberic/blob/main/docs/features/kuberic/service-fabric-api-semantics.md)
+- [Kuberic Service Fabric alignment](https://github.com/youyuanwu/kuberic/blob/main/docs/features/kuberic/service-fabric-alignment.md)
+- [Kuberic Replicator boundary](https://github.com/youyuanwu/kuberic/blob/main/docs/features/kuberic/replicator-boundary.md)
+- [Kuberic stateless default Replicator](https://github.com/youyuanwu/kuberic/blob/main/docs/features/kuberic/stateless-default-replicator.md)
