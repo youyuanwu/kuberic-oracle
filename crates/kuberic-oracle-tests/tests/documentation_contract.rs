@@ -1,3 +1,5 @@
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -58,27 +60,85 @@ fn relative_markdown_links_resolve() {
     for document in documents {
         let content = fs::read_to_string(&document).unwrap();
         for target in markdown_link_targets(&content) {
-            if target.contains("://") || target.starts_with('#') || target.starts_with("mailto:") {
+            if target.contains("://") || target.starts_with("mailto:") {
                 continue;
             }
-            let path = target.split_once('#').map_or(target, |(path, _)| path);
-            if path.is_empty() {
-                continue;
-            }
-            let resolved = document.parent().unwrap().join(path);
+
+            let (path, anchor) = target
+                .split_once('#')
+                .map_or((target.as_str(), None), |(path, anchor)| {
+                    (path, Some(anchor))
+                });
+            let resolved = if path.is_empty() {
+                document.clone()
+            } else {
+                document.parent().unwrap().join(path)
+            };
             assert!(
                 resolved.exists(),
                 "{} references missing {}",
                 document.display(),
                 resolved.display()
             );
+
+            if let Some(anchor) = anchor.filter(|_| {
+                resolved
+                    .extension()
+                    .is_some_and(|extension| extension == "md")
+            }) {
+                let anchors = markdown_heading_anchors(&fs::read_to_string(&resolved).unwrap());
+                assert!(
+                    anchors.contains(anchor),
+                    "{} references missing heading #{anchor} in {}",
+                    document.display(),
+                    resolved.display()
+                );
+            }
         }
     }
 }
 
-fn markdown_link_targets(content: &str) -> impl Iterator<Item = &str> {
-    content
-        .split("](")
-        .skip(1)
-        .filter_map(|suffix| suffix.split_once(')').map(|(target, _)| target))
+fn markdown_link_targets(content: &str) -> Vec<String> {
+    Parser::new_ext(content, Options::all())
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. }) => Some(dest_url.into_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn markdown_heading_anchors(content: &str) -> HashSet<String> {
+    let mut anchors = HashSet::new();
+    let mut heading = None;
+
+    for event in Parser::new_ext(content, Options::all()) {
+        match event {
+            Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
+            Event::Text(text) | Event::Code(text) => {
+                if let Some(heading) = &mut heading {
+                    heading.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some(heading) = heading.take() {
+                    anchors.insert(github_heading_anchor(&heading));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    anchors
+}
+
+fn github_heading_anchor(heading: &str) -> String {
+    let mut anchor = String::new();
+    for character in heading.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() || character == '-' || character == '_' {
+            anchor.push(character);
+        } else if character.is_whitespace() {
+            anchor.push('-');
+        }
+    }
+    anchor
 }
