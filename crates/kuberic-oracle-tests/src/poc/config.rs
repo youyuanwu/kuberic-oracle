@@ -4,8 +4,8 @@ use std::{
 };
 
 use kuberic_oracle::{
-    ConnectionContainer, ContainerDataPolicy, ContractError, EditionProfile, ObservationScope,
-    ObserverTimeouts, PrincipalPlacement, ReplicationProfile,
+    ConnectionContainer, ContainerDataPolicy, ContractError, DecimalScn, EditionProfile,
+    ObservationScope, ObserverTimeouts, PrincipalPlacement, ReplicationProfile,
 };
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +86,13 @@ impl PocAttemptConfig {
         if self.request.target_database_id == 0 {
             return Err(config_failure("target database ID must be nonzero"));
         }
+        if self.request.target_incarnation_number == 0 || self.request.target_resetlogs_id == 0 {
+            return Err(config_failure(
+                "target database incarnation identifiers must be nonzero",
+            ));
+        }
+        DecimalScn::parse(&self.request.target_resetlogs_change)
+            .map_err(|_| config_failure("target resetlogs change must be an exact Oracle SCN"))?;
         if self.request.target_database_unique_name.is_empty()
             || self.request.target_database_unique_name.len() > MAX_SERVICE_BYTES
             || self.request.target_database_unique_name.trim()
@@ -123,6 +130,7 @@ fn validate_path(label: &'static str, path: &Path) -> Result<(), PocFailure> {
 
 fn validate_single_row_scope(scope: &ObservationScope) -> Result<(), PocFailure> {
     if scope.expected_database_rows != 1
+        || scope.expected_incarnation_rows != 1
         || scope.expected_instance_rows != 1
         || scope.expected_product_rows != 1
     {

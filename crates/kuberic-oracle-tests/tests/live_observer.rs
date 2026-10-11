@@ -26,16 +26,31 @@ fn observes_owned_oracle_free_member() {
     let worker_metadata = worker.metadata().unwrap();
     assert!(worker_metadata.is_file());
     assert_ne!(worker_metadata.permissions().mode() & 0o111, 0);
-    let mut fixture = OracleFixture::start(FixtureConfig::from_environment().unwrap()).unwrap();
+    let config = FixtureConfig::from_environment().unwrap();
+    let first_identity = run_first_generation(config.clone()).unwrap();
+    let second = OracleFixture::start(config).unwrap();
+    let second_identity = (second.database_id(), second.database_incarnation());
+    let second_cleanup = second.cleanup();
+    if let Err(cleanup) = second_cleanup {
+        panic!("second-generation cleanup failed: {cleanup}");
+    }
+    if first_identity != second_identity {
+        panic!("pinned Oracle Free fresh-volume identity behavior changed");
+    }
+}
+
+fn run_first_generation(
+    config: FixtureConfig,
+) -> Result<(u64, kuberic_oracle::DatabaseIncarnationIdentity), PocFailure> {
+    let mut fixture = OracleFixture::start(config)?;
     let operation = run_cases(&mut fixture);
+    let identity = (fixture.database_id(), fixture.database_incarnation());
     let cleanup = fixture.cleanup();
     match (operation, cleanup) {
-        (Ok(()), Ok(())) => {}
-        (Err(operation), Ok(())) => panic!("operation failed: {operation}"),
-        (Ok(()), Err(cleanup)) => panic!("cleanup failed: {cleanup}"),
-        (Err(operation), Err(cleanup)) => {
-            panic!("operation failed: {operation}; cleanup failed: {cleanup}")
-        }
+        (Ok(()), Ok(())) => Ok(identity),
+        (Err(operation), Ok(())) => Err(operation),
+        (Ok(()), Err(cleanup)) => Err(cleanup),
+        (Err(operation), Err(cleanup)) => Err(operation.with_cleanup(cleanup)),
     }
 }
 
@@ -80,7 +95,11 @@ fn run_cases(fixture: &mut OracleFixture) -> Result<(), PocFailure> {
         ));
     }
 
-    for view in ["SYS.V_$DATABASE", "SYS.V_$INSTANCE"] {
+    for view in [
+        "SYS.V_$DATABASE",
+        "SYS.V_$INSTANCE",
+        "SYS.V_$DATABASE_INCARNATION",
+    ] {
         fixture.revoke_view(view)?;
         let denied_request = build_request(fixture, fixture.password_file().to_path_buf())?;
         let denied_result = run_worker(
@@ -131,6 +150,7 @@ fn build_request(
             },
             container_data: ContainerDataPolicy::NotApplicable,
             expected_database_rows: 1,
+            expected_incarnation_rows: 1,
             expected_instance_rows: 1,
             expected_product_rows: 1,
         },
@@ -142,6 +162,9 @@ fn build_request(
         },
         target_database_id: fixture.database_id(),
         target_database_unique_name: fixture.database_unique_name().to_owned(),
+        target_incarnation_number: fixture.database_incarnation().incarnation_number,
+        target_resetlogs_id: fixture.database_incarnation().resetlogs_id,
+        target_resetlogs_change: fixture.database_incarnation().resetlogs_change.to_string(),
         maximum_age_millis: 5_000,
     })
 }

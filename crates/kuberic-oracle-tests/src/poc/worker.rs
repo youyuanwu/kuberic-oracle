@@ -4,12 +4,12 @@ use std::{
 };
 
 use kuberic_oracle::{
-    DatabaseId, NativeName, ObservationTarget, RawDatabaseRow, RawInstanceRow,
-    RawObservationIdentity, RawObservationRows, RawProductRow, admit_observation,
-    parse_observation_rows,
+    DatabaseId, DatabaseIncarnationIdentity, DecimalScn, NativeName, ObservationTarget,
+    RawDatabaseIncarnationRow, RawDatabaseRow, RawInstanceRow, RawObservationIdentity,
+    RawObservationRows, RawProductRow, admit_observation, parse_observation_rows,
     query::{
-        DATABASE_SNAPSHOT_SQL, INSTANCE_SNAPSHOT_SQL, OBSERVATION_IDENTITY_SQL,
-        PRODUCT_COMPONENT_SQL,
+        DATABASE_INCARNATION_SQL, DATABASE_SNAPSHOT_SQL, INSTANCE_SNAPSHOT_SQL,
+        OBSERVATION_IDENTITY_SQL, PRODUCT_COMPONENT_SQL,
     },
 };
 use oracledb::{Config, Error, ErrorKind, OracleNumber, OracleTimestamp, Row};
@@ -100,9 +100,23 @@ fn observe(
         &request,
         PocStage::QueryIdentityBefore,
     )?;
+    let incarnation_before = query_incarnation(
+        input,
+        output,
+        &connection,
+        &request,
+        PocStage::QueryIncarnationBefore,
+    )?;
     let database = query_database(input, output, &connection, &request)?;
     let instance = query_instance(input, output, &connection, &request)?;
     let product = query_product(input, output, &connection, &request)?;
+    let incarnation_after = query_incarnation(
+        input,
+        output,
+        &connection,
+        &request,
+        PocStage::QueryIncarnationAfter,
+    )?;
     let (after, _) = query_identity(
         input,
         output,
@@ -115,9 +129,11 @@ fn observe(
     let observation = parse_observation_rows(
         RawObservationRows {
             before,
+            incarnation_before,
             database,
             instance,
             product,
+            incarnation_after,
             after,
         },
         observed_at_unix_millis,
@@ -131,6 +147,12 @@ fn observe(
             request.target_database_unique_name,
         )
         .map_err(classify_contract_error)?,
+        incarnation: DatabaseIncarnationIdentity {
+            incarnation_number: request.target_incarnation_number,
+            resetlogs_id: request.target_resetlogs_id,
+            resetlogs_change: DecimalScn::parse(&request.target_resetlogs_change)
+                .map_err(classify_contract_error)?,
+        },
     };
     admit_observation(
         &request.support,
@@ -146,6 +168,31 @@ fn observe(
         .close()
         .map_err(|error| classify_driver_error(PocStage::Close, &error))?;
     Ok(observation)
+}
+
+fn query_incarnation(
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    connection: &oracledb::Connection,
+    request: &ObservationRequest,
+    stage: PocStage,
+) -> Result<RawDatabaseIncarnationRow, PocFailure> {
+    arm(input, output, stage)?;
+    connection
+        .set_call_timeout(Some(query_call_timeout(request)))
+        .map_err(|error| classify_driver_error(stage, &error))?;
+    let row = query_exactly_one(connection, DATABASE_INCARNATION_SQL, stage)?;
+    Ok(RawDatabaseIncarnationRow {
+        incarnation_number: number_string(&row, "INCARNATION_NUMBER", stage)?,
+        resetlogs_change: number_string(&row, "RESETLOGS_CHANGE", stage)?,
+        resetlogs_time: text(&row, "RESETLOGS_TIME", stage)?,
+        prior_resetlogs_change: number_string(&row, "PRIOR_RESETLOGS_CHANGE", stage)?,
+        prior_resetlogs_time: optional_text(&row, "PRIOR_RESETLOGS_TIME", stage)?,
+        status: text(&row, "STATUS", stage)?,
+        resetlogs_id: number_string(&row, "RESETLOGS_ID", stage)?,
+        prior_incarnation_number: number_string(&row, "PRIOR_INCARNATION_NUMBER", stage)?,
+        container_id: number_string(&row, "CONTAINER_ID", stage)?,
+    })
 }
 
 fn query_identity(
@@ -275,6 +322,11 @@ fn text(row: &Row, column: &str, stage: PocStage) -> Result<String, PocFailure> 
         .map_err(|error| classify_driver_error(stage, &error))
 }
 
+fn optional_text(row: &Row, column: &str, stage: PocStage) -> Result<Option<String>, PocFailure> {
+    row.get(column)
+        .map_err(|error| classify_driver_error(stage, &error))
+}
+
 fn number_string(row: &Row, column: &str, stage: PocStage) -> Result<String, PocFailure> {
     row.get::<OracleNumber>(column)
         .map(|value| value.to_string())
@@ -385,7 +437,11 @@ fn classify_driver_error(stage: PocStage, error: &Error) -> PocFailure {
 
 fn classify_contract_error(error: kuberic_oracle::ContractError) -> PocFailure {
     let category = match error {
-        kuberic_oracle::ContractError::ObservationIdentityChanged => PocCategory::IdentityChanged,
+        kuberic_oracle::ContractError::ObservationIdentityChanged
+        | kuberic_oracle::ContractError::DatabaseIdentityMismatch
+        | kuberic_oracle::ContractError::DatabaseIncarnationMismatch => {
+            PocCategory::IdentityChanged
+        }
         _ => PocCategory::NativeValue,
     };
     PocFailure::new(
@@ -450,6 +506,24 @@ mod tests {
             )
             .unwrap(),
             7
+        );
+    }
+
+    #[test]
+    fn identity_contract_failures_are_classified_separately() {
+        for error in [
+            kuberic_oracle::ContractError::ObservationIdentityChanged,
+            kuberic_oracle::ContractError::DatabaseIdentityMismatch,
+            kuberic_oracle::ContractError::DatabaseIncarnationMismatch,
+        ] {
+            assert_eq!(
+                classify_contract_error(error).category(),
+                PocCategory::IdentityChanged
+            );
+        }
+        assert_eq!(
+            classify_contract_error(kuberic_oracle::ContractError::InvalidScn).category(),
+            PocCategory::NativeValue
         );
     }
 }

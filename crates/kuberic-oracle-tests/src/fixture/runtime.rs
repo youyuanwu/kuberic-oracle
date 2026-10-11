@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use kuberic_oracle::{DatabaseIncarnationIdentity, DecimalScn};
+
 use crate::poc::{PocCategory, PocEndpoint, PocFailure, PocStage};
 use zeroize::Zeroizing;
 
@@ -34,6 +36,7 @@ pub struct OracleFixture {
     credentials: Option<FixtureCredentials>,
     database_id: u64,
     database_unique_name: String,
+    database_incarnation: Option<DatabaseIncarnationIdentity>,
     trace_identity: Cell<Option<FileIdentity>>,
     cleanup_attempted: bool,
 }
@@ -57,6 +60,7 @@ impl OracleFixture {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            database_incarnation: None,
             trace_identity: Cell::new(None),
             cleanup_attempted: false,
         };
@@ -82,6 +86,7 @@ impl OracleFixture {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            database_incarnation: None,
             trace_identity: Cell::new(None),
             cleanup_attempted: true,
         };
@@ -106,6 +111,10 @@ impl OracleFixture {
 
     pub fn database_unique_name(&self) -> &str {
         &self.database_unique_name
+    }
+
+    pub fn database_incarnation(&self) -> DatabaseIncarnationIdentity {
+        self.database_incarnation.unwrap()
     }
 
     pub fn create_wrong_password_file(&mut self) -> Result<(PathBuf, FileIdentity), PocFailure> {
@@ -210,7 +219,10 @@ impl OracleFixture {
     }
 
     pub fn revoke_view(&self, view: &str) -> Result<(), PocFailure> {
-        if !matches!(view, "SYS.V_$DATABASE" | "SYS.V_$INSTANCE") {
+        if !matches!(
+            view,
+            "SYS.V_$DATABASE" | "SYS.V_$INSTANCE" | "SYS.V_$DATABASE_INCARNATION"
+        ) {
             return Err(fixture_failure("unsupported fixture grant mutation"));
         }
         self.execute_sql(&format!(
@@ -219,7 +231,10 @@ impl OracleFixture {
     }
 
     pub fn grant_view(&self, view: &str) -> Result<(), PocFailure> {
-        if !matches!(view, "SYS.V_$DATABASE" | "SYS.V_$INSTANCE") {
+        if !matches!(
+            view,
+            "SYS.V_$DATABASE" | "SYS.V_$INSTANCE" | "SYS.V_$DATABASE_INCARNATION"
+        ) {
             return Err(fixture_failure("unsupported fixture grant mutation"));
         }
         self.execute_sql(&format!(
@@ -237,8 +252,8 @@ impl OracleFixture {
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='CREATE SESSION' AND ADMIN_OPTION='NO') || ':' || \
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE <> 'CREATE SESSION') || ':' || \
                  (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}') || ':' || \
-                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO') || ':' || \
-                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE') AND GRANTABLE='NO')) || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE','V_$DATABASE_INCARNATION') AND GRANTABLE='NO') || ':' || \
+                 (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='{OBSERVER}' AND NOT (PRIVILEGE='SELECT' AND OWNER='SYS' AND TABLE_NAME IN ('V_$DATABASE','V_$INSTANCE','V_$DATABASE_INCARNATION') AND GRANTABLE='NO')) || ':' || \
                  (SELECT COUNT(*) FROM V$PWFILE_USERS WHERE USERNAME='{OBSERVER}') || ':' || \
                  (SELECT COUNT(*) FROM DBA_TAB_PRIVS WHERE GRANTEE='PUBLIC' AND OWNER='SYS' AND TABLE_NAME='PRODUCT_COMPONENT_VERSION' AND PRIVILEGE='READ') || ':' || \
                  (SELECT COUNT(*) FROM DBA_SYS_PRIVS WHERE GRANTEE='PUBLIC' AND PRIVILEGE IN ('SELECT ANY TABLE','SELECT ANY DICTIONARY','CREATE USER','ALTER USER','DROP USER','ALTER DATABASE','ALTER SYSTEM')) || ':' || \
@@ -247,7 +262,7 @@ impl OracleFixture {
                  FROM DUAL"
             ),
         )?;
-        if result != "0:1:1:0:2:2:0:0:1:0:0:0" {
+        if result != "0:1:1:0:3:3:0:0:1:0:0:0" {
             return Err(fixture_failure(
                 "observer effective privileges exceed the PoC profile",
             ));
@@ -345,15 +360,46 @@ impl OracleFixture {
         self.verify_privileges()?;
         let identity = self.query_scalar(
             "ALTER SESSION SET CONTAINER=FREEPDB1;",
-            "SELECT DBID || ':' || DB_UNIQUE_NAME FROM V$DATABASE",
+            "SELECT d.DBID || ':' || d.DB_UNIQUE_NAME || ':' || \
+                    i.INCARNATION# || ':' || i.RESETLOGS_ID || ':' || \
+                    i.RESETLOGS_CHANGE# \
+             FROM V$DATABASE d \
+             CROSS JOIN V$DATABASE_INCARNATION i \
+             WHERE i.STATUS='CURRENT' AND i.CON_ID=0",
         )?;
-        let (database_id, unique_name) = identity
-            .split_once(':')
+        let mut identity = identity.split(':');
+        let database_id = identity
+            .next()
             .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let unique_name = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let incarnation_number = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let resetlogs_id = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        let resetlogs_change = identity
+            .next()
+            .ok_or_else(|| fixture_failure("database identity query was malformed"))?;
+        if identity.next().is_some() {
+            return Err(fixture_failure("database identity query was malformed"));
+        }
         self.database_id = database_id
             .parse()
             .map_err(|_| fixture_failure("database ID query was malformed"))?;
         self.database_unique_name = unique_name.to_owned();
+        self.database_incarnation = Some(DatabaseIncarnationIdentity {
+            incarnation_number: incarnation_number
+                .parse()
+                .map_err(|_| fixture_failure("database incarnation query was malformed"))?,
+            resetlogs_id: resetlogs_id
+                .parse()
+                .map_err(|_| fixture_failure("database incarnation query was malformed"))?,
+            resetlogs_change: DecimalScn::parse(resetlogs_change)
+                .map_err(|_| fixture_failure("database incarnation query was malformed"))?,
+        });
         Ok(())
     }
 
@@ -475,9 +521,11 @@ impl OracleFixture {
              CREATE USER {} IDENTIFIED BY \"{}\";\n\
              GRANT CREATE SESSION TO {};\n\
              GRANT SELECT ON SYS.V_$DATABASE TO {};\n\
-             GRANT SELECT ON SYS.V_$INSTANCE TO {};",
+             GRANT SELECT ON SYS.V_$INSTANCE TO {};\n\
+             GRANT SELECT ON SYS.V_$DATABASE_INCARNATION TO {};",
             credentials.username,
             credentials.password.as_str(),
+            credentials.username,
             credentials.username,
             credentials.username,
             credentials.username,
@@ -949,6 +997,7 @@ mod tests {
             credentials: None,
             database_id: 0,
             database_unique_name: String::new(),
+            database_incarnation: None,
             trace_identity: Cell::new(None),
             cleanup_attempted: true,
         }

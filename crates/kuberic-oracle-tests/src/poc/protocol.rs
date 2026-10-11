@@ -8,7 +8,7 @@ use super::{
     error::{PocFailure, PocStage},
 };
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const BUILD_ID: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PROTOCOL_BYTES: usize = 64 * 1024;
 
@@ -23,6 +23,9 @@ pub struct ObservationRequest {
     pub timeouts: ObserverTimeouts,
     pub target_database_id: u64,
     pub target_database_unique_name: String,
+    pub target_incarnation_number: u64,
+    pub target_resetlogs_id: u64,
+    pub target_resetlogs_change: String,
     pub maximum_age_millis: u64,
 }
 

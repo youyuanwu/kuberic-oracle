@@ -53,6 +53,8 @@ pub enum ContractError {
     StaleObservation,
     #[error("observed database identity does not match the configured target")]
     DatabaseIdentityMismatch,
+    #[error("observed database incarnation does not match the configured target")]
+    DatabaseIncarnationMismatch,
     #[error("observed native edition does not match the configured profile")]
     EditionMismatch,
     #[error("observed Oracle native major version does not match the configured profile")]

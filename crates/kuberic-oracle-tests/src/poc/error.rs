@@ -11,9 +11,11 @@ pub enum PocStage {
     Handshake,
     Connect,
     QueryIdentityBefore,
+    QueryIncarnationBefore,
     QueryDatabase,
     QueryInstance,
     QueryProduct,
+    QueryIncarnationAfter,
     QueryIdentityAfter,
     ParseAdmission,
     Close,
@@ -69,7 +71,7 @@ impl PocFailure {
         self
     }
 
-    pub(crate) fn with_cleanup(mut self, cleanup: PocFailure) -> Self {
+    pub fn with_cleanup(mut self, cleanup: PocFailure) -> Self {
         self.cleanup = Some(Box::new(cleanup));
         self
     }

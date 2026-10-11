@@ -1,5 +1,6 @@
 use kuberic_oracle::{
-    ContractError, DatabaseId, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
+    ContractError, DatabaseId, DatabaseIncarnationIdentity, DatabaseIncarnationSnapshot,
+    DatabaseIncarnationStatus, DatabaseRole, DatabaseSnapshot, DecimalScn, EditionProfile,
     ForceLogging, InstanceSnapshot, LogMode, NativeEdition, NativeName, ObservationTarget,
     OpenMode, OracleObservation, OracleSupportConfig, PinnedImage, ProductSnapshot,
     ReplicationProfile, admit_observation,
@@ -52,6 +53,19 @@ fn observation(
             force_logging: ForceLogging::Enabled,
             is_container_database: true,
         },
+        incarnation: DatabaseIncarnationSnapshot {
+            identity: DatabaseIncarnationIdentity {
+                incarnation_number: 3,
+                resetlogs_id: 123_456_789,
+                resetlogs_change: DecimalScn::parse("100").unwrap(),
+            },
+            resetlogs_time: "2026-10-09T23:59:59".to_owned(),
+            prior_resetlogs_change: DecimalScn::parse("1").unwrap(),
+            prior_resetlogs_time: Some("2026-01-01T00:00:00".to_owned()),
+            prior_incarnation_number: 2,
+            status: DatabaseIncarnationStatus::Current,
+            container_id: 0,
+        },
         instance: InstanceSnapshot {
             instance_name: name("FREE"),
             host_name: name("oracle-free-1"),
@@ -85,6 +99,11 @@ fn target() -> ObservationTarget {
     ObservationTarget {
         database_id: DatabaseId::new(42).unwrap(),
         database_unique_name: name("FREE"),
+        incarnation: DatabaseIncarnationIdentity {
+            incarnation_number: 3,
+            resetlogs_id: 123_456_789,
+            resetlogs_change: DecimalScn::parse("100").unwrap(),
+        },
     }
 }
 
@@ -179,10 +198,29 @@ fn stale_observation_is_rejected() {
 }
 
 #[test]
+fn future_observation_is_rejected() {
+    assert_eq!(
+        admit_observation(
+            &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+            &target(),
+            &observation(
+                EditionProfile::Free,
+                DatabaseRole::Primary,
+                OpenMode::ReadWrite,
+            ),
+            9_000,
+            500,
+        ),
+        Err(ContractError::FutureObservation)
+    );
+}
+
+#[test]
 fn target_identity_must_match() {
     let mismatched = ObservationTarget {
         database_id: DatabaseId::new(43).unwrap(),
         database_unique_name: name("FREE"),
+        incarnation: target().incarnation,
     };
 
     assert_eq!(
@@ -198,6 +236,27 @@ fn target_identity_must_match() {
             500,
         ),
         Err(ContractError::DatabaseIdentityMismatch)
+    );
+}
+
+#[test]
+fn target_incarnation_must_match_even_when_dbid_matches() {
+    let mut mismatched = target();
+    mismatched.incarnation.resetlogs_id += 1;
+
+    assert_eq!(
+        admit_observation(
+            &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+            &mismatched,
+            &observation(
+                EditionProfile::Free,
+                DatabaseRole::Primary,
+                OpenMode::ReadWrite,
+            ),
+            10_000,
+            500,
+        ),
+        Err(ContractError::DatabaseIncarnationMismatch)
     );
 }
 
