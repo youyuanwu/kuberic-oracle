@@ -37,7 +37,8 @@ fn observes_owned_oracle_free_member() {
     let operation_deadline = started + OPERATION_BUDGET;
     let cleanup_deadline = operation_deadline + CLEANUP_RESERVE;
     let config = FixtureConfig::from_environment().unwrap();
-    let mut fixture = OracleFixture::start_until(config, operation_deadline).unwrap();
+    let mut fixture =
+        OracleFixture::start_with_deadlines(config, operation_deadline, cleanup_deadline).unwrap();
     let operation = run_cases(&mut fixture, operation_deadline);
     let cleanup = fixture.cleanup_until(cleanup_deadline);
     match (operation, cleanup) {
@@ -255,9 +256,7 @@ fn build_request(
 ) -> Result<ObservationRequest, PocFailure> {
     let remaining = operation_deadline.saturating_duration_since(Instant::now());
     if remaining <= Duration::from_secs(6) {
-        return Err(PocFailure::fixture_assertion(
-            "live proof operation deadline was exhausted",
-        ));
+        return Err(PocFailure::fixture_timeout());
     }
     let snapshot_millis = remaining
         .min(Duration::from_secs(180))

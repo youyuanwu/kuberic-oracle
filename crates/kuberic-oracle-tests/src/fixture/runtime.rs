@@ -59,13 +59,33 @@ pub struct OracleFixture {
 impl OracleFixture {
     pub fn start(config: FixtureConfig) -> Result<Self, PocFailure> {
         let timeout = Duration::from_secs(config.startup_timeout_seconds);
-        Self::start_until(config, Instant::now() + timeout)
+        let operation_deadline = Instant::now() + timeout;
+        Self::start_with_deadlines(
+            config,
+            operation_deadline,
+            operation_deadline + DOCKER_OPERATION_TIMEOUT,
+        )
     }
 
     pub fn start_until(
         config: FixtureConfig,
         operation_deadline: Instant,
     ) -> Result<Self, PocFailure> {
+        Self::start_with_deadlines(
+            config,
+            operation_deadline,
+            operation_deadline + DOCKER_OPERATION_TIMEOUT,
+        )
+    }
+
+    pub fn start_with_deadlines(
+        config: FixtureConfig,
+        operation_deadline: Instant,
+        cleanup_deadline: Instant,
+    ) -> Result<Self, PocFailure> {
+        if cleanup_deadline <= operation_deadline {
+            return Err(timeout_failure());
+        }
         let owner = OwnerClaim::acquire(&config.root)?;
         let token = owner.token.clone();
         let mut fixture = Self {
@@ -89,19 +109,23 @@ impl OracleFixture {
             cleanup_attempted: false,
         };
         let operation = fixture.start_inner(operation_deadline);
-        fixture.operation_deadline.set(None);
         if let Err(operation) = operation {
             fixture.cleanup_attempted = true;
+            fixture.operation_deadline.set(Some(cleanup_deadline));
             let cleanup = fixture.cleanup_inner().err();
             return Err(match cleanup {
                 Some(cleanup) => operation.with_cleanup(cleanup),
                 None => operation,
             });
         }
+        fixture.operation_deadline.set(None);
         Ok(fixture)
     }
 
     pub fn cleanup_existing(config: FixtureConfig) -> Result<(), PocFailure> {
+        if !config.root.exists() {
+            return Ok(());
+        }
         let (journal, journal_identity) = OwnershipJournal::load(&config.root)?;
         let owner = OwnerClaim::recover(&config.root, &journal.token)?;
         let mut fixture = Self {
@@ -1249,6 +1273,20 @@ mod tests {
         assert!(fixture.cleanup_inner().is_err());
         assert!(root.join("journal.json").exists());
         assert!(root.join("owner.lock").exists());
+    }
+
+    #[test]
+    fn cleanup_existing_is_idempotent_when_fixture_root_is_absent() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("absent-fixture");
+
+        OracleFixture::cleanup_existing(FixtureConfig {
+            docker_program: PathBuf::from("docker"),
+            docker_host: "fake".to_owned(),
+            root,
+            startup_timeout_seconds: 1,
+        })
+        .unwrap();
     }
 
     #[test]

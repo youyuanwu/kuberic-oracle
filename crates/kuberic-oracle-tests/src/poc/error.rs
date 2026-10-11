@@ -96,6 +96,14 @@ impl PocFailure {
         Self::new(PocStage::Fixture, PocCategory::Fixture, message)
     }
 
+    pub fn fixture_timeout() -> Self {
+        Self::new(
+            PocStage::Fixture,
+            PocCategory::Timeout,
+            "fixture operation timed out",
+        )
+    }
+
     pub(crate) fn sanitized_from_worker(self) -> Self {
         let message = match self.category {
             PocCategory::Configuration => "worker configuration failed",
