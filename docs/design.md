@@ -48,7 +48,7 @@ The future native-replication profile is separate:
 
 | Area | Future Data Guard contract |
 |---|---|
-| Edition | Enterprise Developer for permitted non-production work; Enterprise for production |
+| Artifact/profile | Enterprise-capable artifact under explicitly approved non-production terms; `EnterpriseDeveloper` repository profile for non-production research; `Enterprise` profile for production design |
 | Topology | One primary and two physical standbys |
 | Replication | Oracle Data Guard physical standby |
 | Broker | Explicit later design decision |
@@ -57,6 +57,11 @@ The future native-replication profile is separate:
 
 The three-member topology is the repository's supported laboratory and
 integration invariant, not an Oracle Data Guard product minimum.
+
+`EnterpriseDeveloper` remains a repository profile name, not an
+Oracle-published edition or license tier. The exact artifact, terms, platform,
+and evidence requirements are governed by the
+[Data Guard readiness contract](data-guard-readiness.md).
 
 Oracle Free is never represented as Data Guard capable. Running multiple Free
 containers creates isolated standalone databases; it does not create a
@@ -111,7 +116,9 @@ by name alone.
 The production crate implements:
 
 - digest-pinned image-reference syntax validation;
-- explicit Free, Enterprise Developer, and Enterprise edition profiles;
+- explicit `Free`, `EnterpriseDeveloper`, and `Enterprise` repository
+  profiles, with Enterprise-capable artifacts separately governed by their
+  applicable terms;
 - explicit standalone and physical Data Guard replication profiles;
 - fail-closed rejection of Data Guard with Free edition;
 - exact replica-count contracts for the initial profiles;
@@ -329,7 +336,8 @@ Reasons include:
 - Kuberic's scalar progress contract cannot by itself express fencing,
   transport gaps, broker state, or flashback/reinstatement requirements.
 
-See [Kuberic progress](kuberic-progress.md).
+See [Kuberic progress](kuberic-progress.md) and the
+[Data Guard native evidence matrix](data-guard-readiness.md#native-evidence-matrix).
 
 ## Native HA boundary
 
@@ -355,12 +363,21 @@ Before any future promotion, the implementation must prove:
 10. durable publication of the resulting authority and native evidence.
 
 Broker-managed and brokerless Data Guard are separate protocols and require an
-explicit choice. The repository will not mix them opportunistically.
+explicit choice. The repository will not mix them opportunistically. The
+readiness contract keeps that choice blocked until the selected target version,
+privilege model, fencing, and exact-completion evidence are safety-reviewed;
+see [broker tradeoffs and stop conditions](data-guard-readiness.md#broker-managed-and-brokerless-tradeoffs).
 
 ## Credentials and transport security
 
 The future observer will use a dedicated least-privileged principal. It will
 not use `SYS`, `SYSTEM`, or a fixture administration credential.
+
+Observation and mutation authority must use separate principals, credentials,
+and access paths. The observer must be unable to execute SQL, broker/DGMGRL,
+configuration, or fencing mutations. A future mutation principal must be
+available only to an authenticated authorized attempt, never to the periodic
+observation path.
 
 Credentials must be mounted as separate bounded files. Passwords must not
 appear in:
@@ -373,9 +390,11 @@ appear in:
 - error values; or
 - ownership journals.
 
-TLS must verify the server certificate chain and configured connection name.
-There will be no plaintext mode or certificate-verification bypass in the
-supported profile.
+Authenticated encryption must verify the peer certificate chain and configured
+immutable member or infrastructure identity for every authority-bearing
+channel: observation, mutation, broker/DGMGRL, operation authorization, and
+fencing. There will be no plaintext mode or certificate-verification bypass in
+the supported profile.
 
 The exact dynamic-performance-view grants will be determined experimentally
 and documented. The observer must fail closed on missing privilege rather than
@@ -481,6 +500,12 @@ progress. Successful future role or lifecycle callbacks cannot be
 observational no-ops: public completion is semantic evidence of the exact
 operation's postcondition.
 
+The local protocol-11/schema-8 Public V1 preview is reference evidence only:
+it is incompatible, disposable, has no migration contract, is rejected by
+production evaluation, and has not selected a replacement Replicator. The
+[fit/no-fit matrix](data-guard-readiness.md#dormant-kuberic-public-v1-fitno-fit)
+does not make it a dependency.
+
 - host one already provisioned Oracle member through Kuberic's public process
   boundary;
 - bind expected DBID, unique name, artifact, replica, Pod, PVC, and process
@@ -491,17 +516,19 @@ operation's postcondition.
 
 ### Stage 4: Enterprise Data Guard research and fixture
 
-- confirm the exact development license and image-distribution path;
-- choose broker-managed or brokerless operation;
-- construct a three-member Enterprise Developer laboratory as a repository
+- retain the exact development terms and image-distribution path as stop
+  conditions until an authorized 23-or-later artifact is verified;
+- choose broker-managed or brokerless operation only after the documented
+  tradeoffs receive a separate safety review;
+- construct a three-member Enterprise-capable laboratory as a repository
   support invariant rather than an Oracle product minimum;
-- document redo transport, apply, gap, lineage, flashback, and reinstatement
-  evidence;
+- use the readiness contract's redo transport, apply, gap, lineage, flashback,
+  operation-completion, and identity matrices as the minimum evidence set;
 - determine the product and licensing implications of every admitted native
   state, including `READ ONLY WITH APPLY`, for the selected CDB/PDB use;
-- determine whether Kuberic's fixed progress API can represent the required
-  authority safely; and
-- stop if the contract cannot express the required safety evidence.
+- wait for a stable selected Kuberic public contract rather than mapping SCN
+  to a dormant scalar progress preview; and
+- enforce the [readiness stop conditions](data-guard-readiness.md#stop-conditions).
 
 ### Stage 5: authority-changing operations
 
@@ -547,6 +574,7 @@ The initial implementation excludes:
 - [Oracle dynamic performance views](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/about-dynamic-performance-views.html)
 - [Oracle Data Guard Concepts and Administration](https://docs.oracle.com/en/database/oracle/oracle-database/26/sbydb/)
 - [Oracle Technology Network License Agreement](https://www.oracle.com/downloads/licenses/standard-license.html)
+- [Oracle Data Guard readiness contract](data-guard-readiness.md)
 - [Kuberic PostgreSQL design](https://github.com/youyuanwu/kuberic/blob/main/docs/features/postgres/design.md)
 - [Kuberic MSSQL design](https://github.com/youyuanwu/kuberic-mssql/blob/main/docs/design.md)
 - [Kuberic Service Fabric API semantics](https://github.com/youyuanwu/kuberic/blob/main/docs/features/kuberic/service-fabric-api-semantics.md)

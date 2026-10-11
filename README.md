@@ -31,7 +31,10 @@ changes. The live driver and plaintext connection exist only in the tests
 crate; plaintext is not a supported production mode.
 
 See the [support and safety design](docs/design.md) and
-[Kuberic progress analysis](docs/kuberic-progress.md).
+[Kuberic progress analysis](docs/kuberic-progress.md). The
+[Data Guard readiness contract](docs/data-guard-readiness.md) records the
+Enterprise lab evidence matrix, dormant Public V1 fit analysis, and explicit
+implementation stop conditions.
 
 ## Initial deployment decision
 
@@ -75,17 +78,19 @@ security patches. See the
 
 ## Supported profiles
 
-| Profile | Edition | Replicas | Replication | Current status |
+| Profile | Repository edition profile / artifact | Replicas | Replication | Current status |
 |---|---|---:|---|---|
 | `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + test-only live proof |
-| `standalone` | Enterprise Developer/Enterprise | 1 | None | Contract implemented |
-| `data_guard_physical` | Enterprise Developer/Enterprise | 3 | Oracle Data Guard | Contract only |
+| `standalone` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 1 | None | Contract implemented |
+| `data_guard_physical` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 3 | Oracle Data Guard | Contract only |
 
 The three-member Data Guard count is this repository's supported laboratory
 invariant, not an Oracle Data Guard product minimum.
 
-Enterprise Developer is suitable only where the applicable Oracle license
-permits development, testing, prototyping, and demonstration. Production use
+`EnterpriseDeveloper` is a repository profile name, not an Oracle-published
+edition or license tier. A non-production Enterprise-capable lab is permitted
+only when the applicable terms for the exact selected artifact allow its
+development, testing, prototyping, or demonstration use. Production use
 requires the appropriate Oracle commercial licenses. This repository does not
 accept license terms on behalf of an operator.
 
@@ -108,6 +113,12 @@ Run all checks, including the Oracle Free live proof:
 
 ```bash
 just check
+```
+
+Run only the tracked documentation contract:
+
+```bash
+just docs-check
 ```
 
 The equivalent commands are:
