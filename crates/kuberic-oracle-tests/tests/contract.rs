@@ -131,6 +131,18 @@ fn free_standalone_profile_is_supported() {
 }
 
 #[test]
+fn free_standalone_profile_requires_one_replica() {
+    assert_eq!(
+        config(EditionProfile::Free, ReplicationProfile::Standalone, 2).validate(),
+        Err(ContractError::UnsupportedReplicaCount {
+            profile: "standalone",
+            expected: 1,
+            actual: 2,
+        })
+    );
+}
+
+#[test]
 fn free_data_guard_profile_is_rejected() {
     assert_eq!(
         config(
@@ -177,6 +189,24 @@ fn fresh_free_primary_observation_is_admitted() {
 
     assert_eq!(admission.role, DatabaseRole::Primary);
     assert_eq!(admission.current_scn.unwrap().value(), 123_456_789);
+}
+
+#[test]
+fn free_standalone_profile_rejects_standby_role() {
+    assert_eq!(
+        admit_observation(
+            &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+            &target(),
+            &observation(
+                EditionProfile::Free,
+                DatabaseRole::PhysicalStandby,
+                OpenMode::Mounted,
+            ),
+            10_000,
+            500,
+        ),
+        Err(ContractError::UnsupportedDatabaseRole)
+    );
 }
 
 #[test]
