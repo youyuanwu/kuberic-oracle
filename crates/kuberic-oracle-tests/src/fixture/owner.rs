@@ -252,4 +252,34 @@ mod tests {
         std::fs::remove_file(root.join("journal.json")).unwrap();
         recovered.release().unwrap();
     }
+
+    #[test]
+    fn cleared_and_adopted_resource_identities_round_trip() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let mut journal = OwnershipJournal {
+            token: owner.token.clone(),
+            container_expected: true,
+            volume_expected: true,
+            network_expected: true,
+            ..OwnershipJournal::default()
+        };
+        journal.persist(&root).unwrap();
+
+        let (cleared, _) = OwnershipJournal::load(&root).unwrap();
+        assert!(cleared.container_id.is_empty());
+        assert!(cleared.volume_identity.is_empty());
+        assert!(cleared.network_id.is_empty());
+
+        journal.container_id = "container-2".to_owned();
+        journal.volume_identity = "created-2|/mount-2|local".to_owned();
+        journal.network_id = "network-2".to_owned();
+        journal.persist(&root).unwrap();
+
+        let (adopted, _) = OwnershipJournal::load(&root).unwrap();
+        assert_eq!(adopted.container_id, "container-2");
+        assert_eq!(adopted.volume_identity, "created-2|/mount-2|local");
+        assert_eq!(adopted.network_id, "network-2");
+    }
 }
