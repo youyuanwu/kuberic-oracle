@@ -123,8 +123,17 @@ impl OracleFixture {
     }
 
     pub fn cleanup_existing(config: FixtureConfig) -> Result<(), PocFailure> {
-        if !config.root.exists() {
-            return Ok(());
+        match std::fs::symlink_metadata(&config.root) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => {
+                return Err(cleanup_failure(
+                    "fixture root could not be inspected for recovery",
+                ));
+            }
+            Ok(metadata) if !metadata.file_type().is_dir() => {
+                return Err(cleanup_failure("fixture root type is invalid"));
+            }
+            Ok(_) => {}
         }
         let (journal, journal_identity) = OwnershipJournal::load(&config.root)?;
         let owner = OwnerClaim::recover(&config.root, &journal.token)?;
@@ -1287,6 +1296,25 @@ mod tests {
             startup_timeout_seconds: 1,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn cleanup_existing_rejects_a_dangling_fixture_root_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture-link");
+        symlink(directory.path().join("missing-target"), &root).unwrap();
+
+        assert!(
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: PathBuf::from("docker"),
+                docker_host: "fake".to_owned(),
+                root,
+                startup_timeout_seconds: 1,
+            })
+            .is_err()
+        );
     }
 
     #[test]
