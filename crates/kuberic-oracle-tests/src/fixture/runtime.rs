@@ -448,6 +448,12 @@ impl OracleFixture {
         self.cleanup_inner()
     }
 
+    pub fn cleanup_until(mut self, cleanup_deadline: Instant) -> Result<(), PocFailure> {
+        self.cleanup_attempted = true;
+        self.operation_deadline.set(Some(cleanup_deadline));
+        self.cleanup_inner()
+    }
+
     fn start_inner(&mut self, operation_deadline: Instant) -> Result<(), PocFailure> {
         self.preflight(operation_deadline)?;
         let credentials = FixtureCredentials::create(&self.config.root)?;
