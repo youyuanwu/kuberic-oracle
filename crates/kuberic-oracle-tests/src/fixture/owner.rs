@@ -41,9 +41,39 @@ impl FileIdentity {
 
 pub struct OwnerClaim {
     root: PathBuf,
+    root_identity: DirectoryIdentity,
     lock_path: PathBuf,
     lock_identity: FileIdentity,
     pub token: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+}
+
+impl DirectoryIdentity {
+    fn from_path(path: &Path) -> Result<Self, PocFailure> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| fixture_failure("fixture root identity is unavailable"))?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(fixture_failure("fixture root identity is invalid"));
+        }
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            uid: metadata.uid(),
+        })
+    }
+
+    fn matches_path(self, path: &Path) -> bool {
+        Self::from_path(path).is_ok_and(|current| current == self)
+    }
 }
 
 impl OwnerClaim {
@@ -103,8 +133,10 @@ impl OwnerClaim {
             .and_then(|()| lock.sync_all())
             .map_err(|_| fixture_failure("fixture owner claim could not be persisted"))?;
         let lock_identity = FileIdentity::from_path(&lock_path)?;
+        let root_identity = DirectoryIdentity::from_path(root)?;
         Ok(Self {
             root: root.to_path_buf(),
+            root_identity,
             lock_path,
             lock_identity,
             token,
@@ -112,6 +144,7 @@ impl OwnerClaim {
     }
 
     pub fn release(self) -> Result<(), PocFailure> {
+        self.validate_root()?;
         if !self.lock_identity.matches_path(&self.lock_path) {
             return Err(cleanup_failure("fixture owner claim identity changed"));
         }
@@ -135,6 +168,7 @@ impl OwnerClaim {
 
     pub fn recover(root: &Path, expected_token: &str) -> Result<Self, PocFailure> {
         let lock_path = root.join("owner.lock");
+        let root_identity = DirectoryIdentity::from_path(root)?;
         let lock_identity = FileIdentity::from_path(&lock_path)?;
         let mut token = String::new();
         std::fs::File::open(&lock_path)
@@ -145,10 +179,18 @@ impl OwnerClaim {
         }
         Ok(Self {
             root: root.to_path_buf(),
+            root_identity,
             lock_path,
             lock_identity,
             token,
         })
+    }
+
+    pub(crate) fn validate_root(&self) -> Result<(), PocFailure> {
+        if !self.root_identity.matches_path(&self.root) {
+            return Err(cleanup_failure("fixture root identity changed"));
+        }
+        Ok(())
     }
 }
 
@@ -157,6 +199,8 @@ pub struct OwnershipJournal {
     pub token: String,
     #[serde(default)]
     pub docker_host: String,
+    #[serde(default)]
+    pub docker_daemon_id: String,
     #[serde(default)]
     pub mutation_ambiguous: bool,
     pub network_name: String,
@@ -301,6 +345,21 @@ mod tests {
 
         assert!(OwnerClaim::acquire(&root).is_err());
         assert!(target.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn owner_claim_detects_fixture_root_swap_after_acquisition() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("fixture");
+        let owner = OwnerClaim::acquire(&root).unwrap();
+        let original = directory.path().join("fixture-original");
+        std::fs::rename(&root, &original).unwrap();
+        let replacement = directory.path().join("replacement");
+        std::fs::create_dir(&replacement).unwrap();
+        symlink(&replacement, &root).unwrap();
+
+        assert!(owner.validate_root().is_err());
+        assert!(replacement.read_dir().unwrap().next().is_none());
     }
 
     #[test]

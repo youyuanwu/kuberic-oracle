@@ -208,7 +208,8 @@ reported together.
 
 The fixture root is a same-UID owner-only directory, not a symlink. Persisted
 file paths must remain direct children of that root, and recovery is bound to
-the exact normalized local Unix Docker endpoint recorded in the journal.
+the exact normalized local Unix Docker endpoint and daemon ID recorded in the
+journal.
 Journal publication synchronizes both file content and the containing
 directory; a complete owner-matching temporary publication is recovered,
 while malformed or conflicting temporary state fails closed.

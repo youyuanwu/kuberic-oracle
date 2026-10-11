@@ -71,6 +71,16 @@ impl PocFailure {
         self
     }
 
+    pub(crate) fn fixture_command(message: String) -> Self {
+        Self {
+            stage: PocStage::Fixture,
+            category: PocCategory::Fixture,
+            oracle_code: None,
+            message,
+            cleanup: None,
+        }
+    }
+
     pub fn with_cleanup(mut self, cleanup: PocFailure) -> Self {
         self.cleanup = Some(Box::new(cleanup));
         self
