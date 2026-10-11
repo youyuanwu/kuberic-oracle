@@ -132,10 +132,15 @@ A future physical Data Guard adapter must keep at least these domains separate.
 
 These values are related but not interchangeable.
 
+The complete source, freshness, allowed-claim, and forbidden-inference rules
+are in the
+[Data Guard native evidence matrix](data-guard-readiness.md#native-evidence-matrix).
+
 ## Initial Kuberic behavior
 
-When the Kuberic runtime is added, callbacks may validate fresh native identity
-and role evidence. They must not mutate Oracle or fabricate unsupported
+Oracle Free requires a future observation-only hosting boundary that may
+validate fresh native identity and role evidence. It must not pretend to
+implement replication callbacks, mutate Oracle, or fabricate unsupported
 capabilities.
 
 That integration is blocked on Kuberic Phase 5's future public V1
@@ -144,10 +149,22 @@ evidence is not itself `HistoryContext`, a Kuberic replica incarnation,
 `ReplicatorCapabilities`, or Kuberic progress. Those mappings require the
 future public contract.
 
+The local protocol-11/schema-8 Public V1 preview is dormant reference material,
+not that future contract. It is incompatible with production protocol
+9/schema 6, disposable, has no storage-migration contract, is rejected by
+production evaluation, and has not selected a replacement Replicator. The
+[Public V1 fit/no-fit matrix](data-guard-readiness.md#dormant-kuberic-public-v1-fitno-fit)
+records conceptual fit and blockers without creating a dependency.
+
 Successful future role and lifecycle callbacks cannot be implemented as
 observational no-ops. Public completion is semantic evidence that the exact
 operation-specific postcondition was established; it must not be inferred from
 an unchanged observation or from private ACK/copy/quorum facts.
+
+The
+[operation-completion matrix](data-guard-readiness.md#exact-operation-completion-matrix)
+separates Oracle-native state from repository request/attempt binding and
+defaults unattributable outcomes to ambiguous.
 
 The left column is behavioral shorthand, not a promise of public Kuberic
 methods with those exact names. Stage 3 must bind each behavior to the actual
@@ -226,23 +243,22 @@ If Kuberic's fixed progress API cannot carry or reliably reference this evidence
 Oracle Data Guard must remain an external observe-only engine rather than
 receiving an unsafe partial integration.
 
-## Open research questions
+## Research status
 
-Before publishing progress, the project must answer:
+The readiness phase classifies the previous open questions without converting
+partial evidence into implementation authority:
 
-1. Which exact dynamic performance views provide stable, least-privileged
-   primary and standby positions for supported Oracle versions?
-2. Which values remain comparable across restart, switchover, failover,
-   reinstatement, duplicate, flashback, and resetlogs?
-3. Is one scalar configuration value available and safe for Kuberic's progress
-   API, or is a durable evidence reference required?
-4. How are archive gaps and real-time apply represented without race-prone
-   multi-view assumptions?
-5. Is broker-managed Data Guard required for a supported mutation protocol?
-6. What old-primary fencing mechanism is independently verifiable?
-7. Which Active Data Guard observations require separately licensed features?
-8. Can a three-member laboratory exercise the complete protocol under the
-   applicable development license?
+| Question | Status | Remaining blocker |
+|---|---|---|
+| Stable least-privilege primary/standby views | Partially answered | Oracle 26 sources identify candidate views, but least-privilege grants and the selected lab version require verification. |
+| Comparability across restart and role/lineage transitions | Partially answered | Identity and incarnation domains are defined; operation-specific lineage and causality require lab proof. |
+| Scalar Kuberic progress | Answered: no direct scalar mapping | SCN and compound Data Guard evidence must not be converted to Kuberic LSN/history. A future evidence-reference contract remains upstream work. |
+| Gaps and real-time apply without sampling races | Partially answered | Native sources are cataloged, but multi-view identity bracketing, freshness, expected no-row behavior, and broker/view disagreement require implementation proof. |
+| Broker-managed versus brokerless mutation | Blocked | Tradeoffs are documented; selection requires a separate safety review. |
+| Old-primary fencing | Blocked | No independently verifiable fencing mechanism is selected. |
+| Active Data Guard licensing | Blocked | `READ ONLY WITH APPLY` remains a native admission value only; entitlement for the selected artifact and use is unsourced. |
+| Three-member licensed lab | Blocked | Exact 23-or-later artifact, terms, platform, registry access, and topology authorization are unverified. |
 
-Until these questions are answered and reviewed, Oracle progress remains native
-observation evidence only.
+The full [stop-condition list](data-guard-readiness.md#stop-conditions) is
+normative for future implementation. Until those conditions pass, Oracle
+progress remains native observation evidence only.

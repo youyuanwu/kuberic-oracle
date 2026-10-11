@@ -31,7 +31,10 @@ changes. The live driver and plaintext connection exist only in the tests
 crate; plaintext is not a supported production mode.
 
 See the [support and safety design](docs/design.md) and
-[Kuberic progress analysis](docs/kuberic-progress.md).
+[Kuberic progress analysis](docs/kuberic-progress.md). The
+[Data Guard readiness contract](docs/data-guard-readiness.md) records the
+Enterprise lab evidence matrix, dormant Public V1 fit analysis, and explicit
+implementation stop conditions.
 
 ## Initial deployment decision
 
@@ -84,8 +87,10 @@ security patches. See the
 The three-member Data Guard count is this repository's supported laboratory
 invariant, not an Oracle Data Guard product minimum.
 
-Enterprise Developer is suitable only where the applicable Oracle license
-permits development, testing, prototyping, and demonstration. Production use
+`Enterprise Developer` is repository shorthand, not an Oracle-published
+edition or license tier. A non-production Enterprise-capable lab is permitted
+only when the applicable terms for the exact selected artifact allow its
+development, testing, prototyping, or demonstration use. Production use
 requires the appropriate Oracle commercial licenses. This repository does not
 accept license terms on behalf of an operator.
 
