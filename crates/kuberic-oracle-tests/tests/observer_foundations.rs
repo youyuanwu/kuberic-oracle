@@ -38,6 +38,9 @@ fn identity() -> RawObservationIdentity {
         database_unique_name: "FREE".to_owned(),
         instance_name: "FREE".to_owned(),
         startup_time: "2026-10-10T00:00:00Z".to_owned(),
+        incarnation_number: "3".to_owned(),
+        resetlogs_id: "123456789".to_owned(),
+        resetlogs_change: "100".to_owned(),
     }
 }
 
@@ -161,6 +164,8 @@ fn lineage_preserves_38_digit_resetlogs_changes() {
     raw.database.resetlogs_change = value.to_owned();
     raw.incarnation_before.resetlogs_change = value.to_owned();
     raw.incarnation_after.resetlogs_change = value.to_owned();
+    raw.before.resetlogs_change = value.to_owned();
+    raw.after.resetlogs_change = value.to_owned();
 
     let observation = parse_observation_rows(raw, 9_900).unwrap();
 

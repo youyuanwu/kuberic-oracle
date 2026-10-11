@@ -76,6 +76,14 @@ impl PocFailure {
         self
     }
 
+    pub(crate) fn append_cleanup(mut self, cleanup: PocFailure) -> Self {
+        self.cleanup = Some(match self.cleanup.take() {
+            Some(existing) => Box::new(existing.append_cleanup(cleanup)),
+            None => Box::new(cleanup),
+        });
+        self
+    }
+
     pub const fn stage(&self) -> PocStage {
         self.stage
     }

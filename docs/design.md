@@ -206,6 +206,13 @@ Cleanup success means every owned resource was removed or was already absent
 with conclusive identity evidence. Operational and cleanup failures must be
 reported together.
 
+The fixture root is a same-UID owner-only directory, not a symlink. Persisted
+file paths must remain direct children of that root, and recovery is bound to
+the exact normalized local Unix Docker endpoint recorded in the journal.
+Journal publication synchronizes both file content and the containing
+directory; a complete owner-matching temporary publication is recovered,
+while malformed or conflicting temporary state fails closed.
+
 ## Observation contract
 
 Every attempt will use fixed, read-only queries. Arbitrary SQL is not accepted
@@ -449,6 +456,8 @@ Implemented for the local PoC:
 - ownership-safe same-container restart, same-volume container recreation, and
   fresh-volume generation with revalidated container, volume, mount, network,
   image, port, and journal evidence;
+- restricted-worker observation after every generation, including the
+  fresh-volume clone;
 - interruption recovery across cleared and unrecorded replacement identities;
   and
 - an ordinary Rust test enabled by repository Cargo configuration and the

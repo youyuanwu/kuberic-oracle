@@ -1,3 +1,4 @@
+use crate::parser::validate_observation_evidence;
 use crate::{
     ContractError, DatabaseId, DatabaseIncarnationIdentity, DatabaseRole, DecimalScn,
     EditionProfile, ForceLogging, LogMode, NativeEdition, NativeName, OpenMode, OracleObservation,
@@ -28,6 +29,7 @@ pub fn admit_observation(
     maximum_age_millis: u64,
 ) -> Result<Admission, ContractError> {
     config.validate()?;
+    validate_observation_evidence(observation)?;
 
     if observation.observed_at_unix_millis > now_unix_millis {
         return Err(ContractError::FutureObservation);

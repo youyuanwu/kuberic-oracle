@@ -39,6 +39,7 @@ fn observes_owned_oracle_free_member() {
     let config = FixtureConfig::from_environment().unwrap();
     let mut fixture =
         OracleFixture::start_with_deadlines(config, operation_deadline, cleanup_deadline).unwrap();
+    fixture.set_operation_deadline(operation_deadline);
     let operation = run_cases(&mut fixture, operation_deadline);
     let cleanup = fixture.cleanup_until(cleanup_deadline);
     match (operation, cleanup) {
@@ -171,6 +172,9 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
             "pinned Oracle Free fresh-volume identity behavior changed",
         ));
     }
+    let fresh = observe(fixture, operation_deadline)?;
+    require_stable_identity(&observation, &fresh)?;
+    require_restart_changed(&recreated, &fresh)?;
 
     Ok(())
 }
@@ -199,18 +203,34 @@ fn require_stable_identity(
 ) -> Result<(), PocFailure> {
     let expected_database = &expected.database;
     let observed_database = &observed.database;
-    if expected_database.database_id != observed_database.database_id
-        || expected_database.database_name != observed_database.database_name
-        || expected_database.database_unique_name != observed_database.database_unique_name
-        || expected_database.resetlogs_change != observed_database.resetlogs_change
-        || expected_database.activation_number != observed_database.activation_number
-        || expected.incarnation != observed.incarnation
-        || expected.instance.instance_name != observed.instance.instance_name
-    {
-        return Err(live_failure(
-            "stable Oracle database identity or lineage evidence changed",
-        ));
-    }
+    require_equal(
+        expected_database.database_id == observed_database.database_id,
+        "stable Oracle DBID changed",
+    )?;
+    require_equal(
+        expected_database.database_name == observed_database.database_name,
+        "stable Oracle database name changed",
+    )?;
+    require_equal(
+        expected_database.database_unique_name == observed_database.database_unique_name,
+        "stable Oracle database unique name changed",
+    )?;
+    require_equal(
+        expected_database.resetlogs_change == observed_database.resetlogs_change,
+        "stable Oracle resetlogs change changed",
+    )?;
+    require_equal(
+        expected_database.activation_number == observed_database.activation_number,
+        "stable Oracle activation number changed",
+    )?;
+    require_equal(
+        expected.incarnation == observed.incarnation,
+        "stable Oracle current incarnation changed",
+    )?;
+    require_equal(
+        expected.instance.instance_name == observed.instance.instance_name,
+        "stable Oracle instance name changed",
+    )?;
     Ok(())
 }
 
@@ -231,22 +251,59 @@ fn require_same_resources(
     after: &FixtureResourceEvidence,
     same_container: bool,
 ) -> Result<(), PocFailure> {
-    if (same_container && before.container_id != after.container_id)
-        || (!same_container && before.container_id == after.container_id)
-        || before.volume_identity != after.volume_identity
-        || before.volume_name != after.volume_name
-        || before.volume_owner_label != after.volume_owner_label
-        || before.network_id != after.network_id
-        || before.network_owner_label != after.network_owner_label
-        || after.attached_network_id != after.network_id
-        || before.container_owner_label != after.container_owner_label
-        || before.image != after.image
-    {
-        return Err(live_failure(
-            "fixture restart or recreation evidence was inconsistent",
-        ));
-    }
+    require_equal(
+        if same_container {
+            before.container_id == after.container_id
+        } else {
+            before.container_id != after.container_id
+        },
+        if same_container {
+            "restart changed owned container identity"
+        } else {
+            "container recreation preserved old container identity"
+        },
+    )?;
+    require_equal(
+        before.volume_identity == after.volume_identity,
+        "same-volume transition changed owned volume identity",
+    )?;
+    require_equal(
+        before.volume_name == after.volume_name,
+        "same-volume transition changed mounted volume name",
+    )?;
+    require_equal(
+        before.volume_owner_label == after.volume_owner_label,
+        "same-volume transition changed volume owner label",
+    )?;
+    require_equal(
+        before.network_id == after.network_id,
+        "fixture transition changed network identity",
+    )?;
+    require_equal(
+        before.network_owner_label == after.network_owner_label,
+        "fixture transition changed network owner label",
+    )?;
+    require_equal(
+        after.attached_network_id == after.network_id,
+        "fixture transition attached the container to another network",
+    )?;
+    require_equal(
+        before.container_owner_label == after.container_owner_label,
+        "fixture transition changed container owner label",
+    )?;
+    require_equal(
+        before.image == after.image,
+        "fixture transition changed container image",
+    )?;
     Ok(())
+}
+
+fn require_equal(condition: bool, message: &'static str) -> Result<(), PocFailure> {
+    if condition {
+        Ok(())
+    } else {
+        Err(live_failure(message))
+    }
 }
 
 fn build_request(
@@ -302,7 +359,7 @@ fn build_request(
         target_incarnation_number: fixture.database_incarnation().incarnation_number,
         target_resetlogs_id: fixture.database_incarnation().resetlogs_id,
         target_resetlogs_change: fixture.database_incarnation().resetlogs_change.to_string(),
-        maximum_age_millis: 5_000,
+        maximum_age_millis: snapshot_millis,
     })
 }
 

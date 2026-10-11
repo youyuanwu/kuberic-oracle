@@ -141,7 +141,8 @@ including the live proof. Setting
 The live proof requires Linux x86-64, Docker, `strace`, sufficient image
 storage, the pinned Linux image digest, and one local `FREEPDB1` observer. It
 uses Oracle's pure-Rust `oracledb` beta without Instant Client. The fixture
-publishes the listener on host loopback only, verifies worker connection
+accepts only a normalized absolute local Unix Docker socket, binds recovery to
+that endpoint, publishes the listener on host loopback only, verifies worker connection
 destinations, runs positive/authentication/authorization cases serially,
 brackets the current whole-database incarnation, proves instance restart and
 same-volume container recreation separately, and removes only
@@ -149,8 +150,9 @@ identity-matched owned resources.
 
 The pinned image seeds a fresh owned volume with the same DBID and current
 incarnation evidence. The live proof therefore records changed fixture
-container/volume identity as a clone ambiguity; it does not claim that
-Oracle-native observation can reject that clone as a different database.
+container/volume identity as a clone ambiguity and confirms the new generation
+through the restricted one-shot observer; it does not claim that Oracle-native
+observation can reject that clone as a different database.
 
 This plaintext PoC does not establish the production transport design. A future
 production observer must connect to an already provisioned database with a

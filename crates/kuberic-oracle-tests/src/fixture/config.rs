@@ -23,6 +23,32 @@ impl FixtureConfig {
         }
         let docker_host = std::env::var("KUBERIC_ORACLE_DOCKER_HOST")
             .unwrap_or_else(|_| "unix:///var/run/docker.sock".to_owned());
+        let docker_socket = docker_host
+            .strip_prefix("unix://")
+            .map(PathBuf::from)
+            .filter(|path| {
+                path.is_absolute()
+                    && !path.components().any(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::CurDir | std::path::Component::ParentDir
+                        )
+                    })
+            })
+            .ok_or_else(|| {
+                PocFailure::new(
+                    PocStage::Fixture,
+                    PocCategory::Fixture,
+                    "live PoC Docker endpoint must be a normalized absolute Unix socket",
+                )
+            })?;
+        if docker_socket.as_os_str().is_empty() {
+            return Err(PocFailure::new(
+                PocStage::Fixture,
+                PocCategory::Fixture,
+                "live PoC Docker endpoint must be a normalized absolute Unix socket",
+            ));
+        }
         let root = std::env::var_os("KUBERIC_ORACLE_FIXTURE_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| {

@@ -214,6 +214,9 @@ fn query_identity(
             database_unique_name: text(&row, "DATABASE_UNIQUE_NAME", stage)?,
             instance_name: text(&row, "INSTANCE_NAME", stage)?,
             startup_time: timestamp_string(&row, "STARTUP_TIME", stage)?,
+            incarnation_number: number_string(&row, "INCARNATION_NUMBER", stage)?,
+            resetlogs_id: number_string(&row, "RESETLOGS_ID", stage)?,
+            resetlogs_change: number_string(&row, "RESETLOGS_CHANGE", stage)?,
         },
         observed_at,
     ))

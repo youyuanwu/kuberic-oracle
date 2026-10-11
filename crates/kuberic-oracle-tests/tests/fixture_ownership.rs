@@ -29,3 +29,25 @@ fn preflight_failure_rolls_back_owner_claim() {
     assert!(result.is_err());
     assert!(!root.exists());
 }
+
+#[test]
+fn remote_docker_endpoint_is_rejected_before_fixture_creation() {
+    let _guard = ENVIRONMENT.lock().unwrap();
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("fixture");
+    unsafe {
+        std::env::set_var("KUBERIC_ORACLE_ACCEPT_FREE_TERMS", "YES");
+        std::env::set_var("KUBERIC_ORACLE_DOCKER_HOST", "tcp://127.0.0.1:2375");
+        std::env::set_var("KUBERIC_ORACLE_FIXTURE_ROOT", &root);
+    }
+
+    let result = FixtureConfig::from_environment();
+
+    unsafe {
+        std::env::remove_var("KUBERIC_ORACLE_ACCEPT_FREE_TERMS");
+        std::env::remove_var("KUBERIC_ORACLE_DOCKER_HOST");
+        std::env::remove_var("KUBERIC_ORACLE_FIXTURE_ROOT");
+    }
+    assert!(result.is_err());
+    assert!(!root.exists());
+}

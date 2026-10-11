@@ -16,6 +16,9 @@ pub struct RawObservationIdentity {
     pub database_unique_name: String,
     pub instance_name: String,
     pub startup_time: String,
+    pub incarnation_number: String,
+    pub resetlogs_id: String,
+    pub resetlogs_change: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,7 +93,10 @@ pub fn parse_observation_rows(
     let incarnation_before = parse_incarnation(rows.incarnation_before)?;
     let incarnation_after = parse_incarnation(rows.incarnation_after)?;
 
-    if before != after || incarnation_before != incarnation_after {
+    if before != after
+        || incarnation_before != incarnation_after
+        || before.incarnation != incarnation_before.identity
+    {
         return Err(ContractError::ObservationIdentityChanged);
     }
 
@@ -127,6 +133,7 @@ struct ParsedIdentity {
     database_unique_name: NativeName,
     instance_name: NativeName,
     startup_time: String,
+    incarnation: DatabaseIncarnationIdentity,
 }
 
 fn parse_identity(row: RawObservationIdentity) -> Result<ParsedIdentity, ContractError> {
@@ -135,6 +142,11 @@ fn parse_identity(row: RawObservationIdentity) -> Result<ParsedIdentity, Contrac
         database_unique_name: NativeName::new("database_unique_name", row.database_unique_name)?,
         instance_name: NativeName::new("instance_name", row.instance_name)?,
         startup_time: parse_text("startup_time", row.startup_time)?,
+        incarnation: DatabaseIncarnationIdentity {
+            incarnation_number: parse_positive_u64("incarnation_number", &row.incarnation_number)?,
+            resetlogs_id: parse_positive_u64("resetlogs_id", &row.resetlogs_id)?,
+            resetlogs_change: DecimalScn::parse(&row.resetlogs_change)?,
+        },
     })
 }
 
@@ -184,7 +196,7 @@ fn parse_incarnation(
         });
     }
 
-    Ok(DatabaseIncarnationSnapshot {
+    let snapshot = DatabaseIncarnationSnapshot {
         identity: DatabaseIncarnationIdentity {
             incarnation_number,
             resetlogs_id,
@@ -196,7 +208,50 @@ fn parse_incarnation(
         prior_incarnation_number,
         status,
         container_id,
-    })
+    };
+    validate_incarnation_snapshot(&snapshot)?;
+    Ok(snapshot)
+}
+
+pub(crate) fn validate_observation_evidence(
+    observation: &OracleObservation,
+) -> Result<(), ContractError> {
+    validate_incarnation_snapshot(&observation.incarnation)?;
+    if observation.database.resetlogs_change != observation.incarnation.identity.resetlogs_change {
+        return Err(ContractError::ObservationIdentityChanged);
+    }
+    Ok(())
+}
+
+fn validate_incarnation_snapshot(
+    incarnation: &DatabaseIncarnationSnapshot,
+) -> Result<(), ContractError> {
+    if incarnation.identity.incarnation_number == 0 {
+        return Err(ContractError::InvalidUnsignedInteger {
+            field: "incarnation_number",
+        });
+    }
+    if incarnation.identity.resetlogs_id == 0 {
+        return Err(ContractError::InvalidUnsignedInteger {
+            field: "resetlogs_id",
+        });
+    }
+    if incarnation.container_id != 0 {
+        return Err(unsupported(
+            "container_id",
+            &incarnation.container_id.to_string(),
+        ));
+    }
+    parse_oracle_date_text("resetlogs_time", incarnation.resetlogs_time.clone())?;
+    if let Some(prior_time) = &incarnation.prior_resetlogs_time {
+        parse_oracle_date_text("prior_resetlogs_time", prior_time.clone())?;
+    }
+    if incarnation.prior_incarnation_number != 0 && incarnation.prior_resetlogs_time.is_none() {
+        return Err(ContractError::MissingField {
+            field: "prior_resetlogs_time",
+        });
+    }
+    Ok(())
 }
 
 fn parse_instance(row: RawInstanceRow) -> Result<InstanceSnapshot, ContractError> {
