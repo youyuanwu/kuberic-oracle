@@ -667,7 +667,13 @@ impl OracleFixture {
                 _ if Instant::now() >= deadline => {
                     return Err(timeout_failure());
                 }
-                _ => thread::sleep(remaining.min(Duration::from_secs(5))),
+                _ => {
+                    let sleep = deadline.saturating_duration_since(Instant::now());
+                    if sleep.is_zero() {
+                        return Err(timeout_failure());
+                    }
+                    thread::sleep(sleep.min(Duration::from_secs(5)));
+                }
             }
         }
     }
@@ -1522,6 +1528,129 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_existing_recovers_lifecycle_interruption_matrix() {
+        struct Case {
+            name: &'static str,
+            journal_container_id: &'static str,
+            current_container_id: Option<&'static str>,
+            journal_volume_identity: &'static str,
+            current_volume_identity: Option<&'static str>,
+        }
+
+        let cases = [
+            Case {
+                name: "restart_before_or_after_command",
+                journal_container_id: "container-old",
+                current_container_id: Some("container-old"),
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_old_container_absence",
+                journal_container_id: "container-old",
+                current_container_id: None,
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_container_identity_clear",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_unrecorded_container_creation",
+                journal_container_id: "",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "recreate_after_recorded_container_creation",
+                journal_container_id: "container-new",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: Some("volume-old|/mount-old|local"),
+            },
+            Case {
+                name: "replace_after_old_volume_absence",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "volume-old|/mount-old|local",
+                current_volume_identity: None,
+            },
+            Case {
+                name: "replace_after_volume_identity_clear",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "",
+                current_volume_identity: None,
+            },
+            Case {
+                name: "replace_after_unrecorded_volume_creation",
+                journal_container_id: "",
+                current_container_id: None,
+                journal_volume_identity: "",
+                current_volume_identity: Some("volume-new|/mount-new|local"),
+            },
+            Case {
+                name: "replace_after_unrecorded_container_creation",
+                journal_container_id: "",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-new|/mount-new|local",
+                current_volume_identity: Some("volume-new|/mount-new|local"),
+            },
+            Case {
+                name: "replace_after_recorded_container_creation",
+                journal_container_id: "container-new",
+                current_container_id: Some("container-new"),
+                journal_volume_identity: "volume-new|/mount-new|local",
+                current_volume_identity: Some("volume-new|/mount-new|local"),
+            },
+        ];
+
+        for case in cases {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join(case.name);
+            let docker = directory.path().join(format!("docker-{}", case.name));
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            write_interruption_state_script(
+                &docker,
+                &owner.token,
+                case.current_container_id,
+                case.current_volume_identity,
+            );
+            let journal = OwnershipJournal {
+                token: owner.token.clone(),
+                network_name: NETWORK_NAME.to_owned(),
+                network_expected: true,
+                network_id: "network-id".to_owned(),
+                volume_name: VOLUME_NAME.to_owned(),
+                volume_expected: true,
+                volume_identity: case.journal_volume_identity.to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: case.journal_container_id.to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            journal.persist(&root).unwrap();
+            drop(owner);
+
+            OracleFixture::cleanup_existing(FixtureConfig {
+                docker_program: docker,
+                docker_host: "fake".to_owned(),
+                root: root.clone(),
+                startup_timeout_seconds: 1,
+            })
+            .unwrap_or_else(|failure| panic!("{}: {failure}", case.name));
+
+            assert!(!root.exists(), "{}", case.name);
+        }
+    }
+
+    #[test]
     fn cleanup_existing_retains_container_identity_label_and_image_mismatches() {
         for (current_id, current_label, current_image) in [
             ("foreign-id", "token", IMAGE),
@@ -1626,6 +1755,59 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_deadline_exhaustion_preserves_journal_then_allows_cleanup() {
+        for operation in ["restart", "recreate", "replace"] {
+            let directory = tempdir().unwrap();
+            let root = directory.path().join(operation);
+            let docker = directory.path().join(format!("docker-{operation}"));
+            let owner = OwnerClaim::acquire(&root).unwrap();
+            write_script(
+                &docker,
+                &format!(
+                    "#!/bin/sh\n\
+                     shift 2\n\
+                     if [ \"$1\" = ps ]; then echo {CONTAINER_NAME}; exit 0; fi\n\
+                     if [ \"$1\" = inspect ]; then\n\
+                       sleep 0.2\n\
+                       case \"$*\" in\n\
+                         *Config.Image*) echo '{IMAGE}' ;;\n\
+                         *Config.Labels*) echo token ;;\n\
+                         *) echo container-id ;;\n\
+                       esac\n\
+                       exit 0\n\
+                     fi\n\
+                     if [ \"$1\" = rm ]; then exit 0; fi\n\
+                     exit 0\n"
+                ),
+            );
+            let journal = OwnershipJournal {
+                token: "token".to_owned(),
+                container_name: CONTAINER_NAME.to_owned(),
+                container_expected: true,
+                container_id: "container-id".to_owned(),
+                image: IMAGE.to_owned(),
+                ..OwnershipJournal::default()
+            };
+            let journal_identity = journal.persist(&root).unwrap();
+            let mut fixture = test_fixture(root.clone(), docker, owner, journal, journal_identity);
+            fixture.cleanup_attempted = false;
+            let deadline = Instant::now() + Duration::from_millis(40);
+
+            let result = match operation {
+                "restart" => fixture.restart_container(deadline),
+                "recreate" => fixture.recreate_container_same_volume(deadline),
+                "replace" => fixture.replace_with_fresh_volume(deadline),
+                _ => unreachable!(),
+            };
+
+            assert_eq!(result.unwrap_err().category(), PocCategory::Timeout);
+            assert!(root.join("journal.json").exists());
+            fixture.cleanup().unwrap();
+            assert!(!root.exists());
+        }
+    }
+
+    #[test]
     fn resource_evidence_revalidates_container_volume_and_network() {
         let directory = tempdir().unwrap();
         let root = directory.path().join("fixture");
@@ -1721,6 +1903,52 @@ mod tests {
     fn write_script(path: &Path, contents: &str) {
         std::fs::write(path, contents).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    fn write_interruption_state_script(
+        path: &Path,
+        token: &str,
+        container_id: Option<&str>,
+        volume_identity: Option<&str>,
+    ) {
+        let container_present = if container_id.is_some() { "yes" } else { "no" };
+        let container_id = container_id.unwrap_or("");
+        let volume_present = if volume_identity.is_some() {
+            "yes"
+        } else {
+            "no"
+        };
+        let volume_identity = volume_identity.unwrap_or("");
+        write_script(
+            path,
+            &format!(
+                "#!/bin/sh\n\
+                 shift 2\n\
+                 if [ \"$1\" = ps ]; then [ '{container_present}' = yes ] && echo {CONTAINER_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = inspect ]; then\n\
+                   case \"$*\" in\n\
+                     *Config.Image*) echo '{IMAGE}' ;;\n\
+                     *Config.Labels*) echo '{token}' ;;\n\
+                     *Mounts*) echo '{VOLUME_NAME}' ;;\n\
+                     *NetworkSettings*) echo network-id ;;\n\
+                     *) echo '{container_id}' ;;\n\
+                   esac\n\
+                   exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = rm ]; then exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = ls ]; then echo {NETWORK_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in *Labels*) echo '{token}' ;; *) echo network-id ;; esac; exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = network ] && [ \"$2\" = rm ]; then exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = ls ]; then [ '{volume_present}' = yes ] && echo {VOLUME_NAME}; exit 0; fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = inspect ]; then\n\
+                   case \"$*\" in *Labels*) echo '{token}' ;; *) echo '{volume_identity}' ;; esac; exit 0\n\
+                 fi\n\
+                 if [ \"$1\" = volume ] && [ \"$2\" = rm ]; then exit 0; fi\n\
+                 exit 0\n"
+            ),
+        );
     }
 
     fn write_resource_inspection_script(path: &Path, mounted_volume: &str) {
