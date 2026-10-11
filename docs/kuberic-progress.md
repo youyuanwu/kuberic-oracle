@@ -135,6 +135,10 @@ These values are related but not interchangeable.
 The complete source, freshness, allowed-claim, and forbidden-inference rules
 are in the
 [Data Guard native evidence matrix](data-guard-readiness.md#native-evidence-matrix).
+The
+[identity-domain matrix](data-guard-readiness.md#identity-domain-matrix)
+defines the non-substitution rules for Oracle, Kuberic, and external
+deployment/storage identities.
 
 ## Initial Kuberic behavior
 
@@ -194,7 +198,8 @@ healthy listener must not be returned as success-shaped substitutes.
 The current Rust contract admits a preliminary physical Data Guard snapshot
 only when:
 
-- edition is Enterprise Developer or Enterprise;
+- the repository profile is `EnterpriseDeveloper` or `Enterprise`, with an
+  Enterprise-capable artifact whose exact terms are separately approved;
 - the configured topology contains exactly three replicas as this repository's
   supported laboratory invariant, not an Oracle Data Guard minimum;
 - role is `PRIMARY` or `PHYSICAL STANDBY`;
@@ -238,6 +243,12 @@ A future promotion operation must bind:
 - an old-primary fence receipt;
 - native transition commands and their complete results; and
 - post-transition role, open-mode, incarnation, and routing evidence.
+
+For failover, independently verifiable fencing proof must be authenticated,
+bound to the exact old-primary and external deployment/storage identities plus
+the operation attempt, and validated **before** any promotion command is
+dispatched. The proof remains part of the final completion evidence; a fencing
+plan or post-dispatch receipt is not sufficient authorization.
 
 If Kuberic's fixed progress API cannot carry or reliably reference this evidence,
 Oracle Data Guard must remain an external observe-only engine rather than

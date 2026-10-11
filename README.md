@@ -78,11 +78,11 @@ security patches. See the
 
 ## Supported profiles
 
-| Profile | Edition | Replicas | Replication | Current status |
+| Profile | Repository edition profile / artifact | Replicas | Replication | Current status |
 |---|---|---:|---|---|
 | `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + test-only live proof |
-| `standalone` | Enterprise Developer/Enterprise | 1 | None | Contract implemented |
-| `data_guard_physical` | Enterprise Developer/Enterprise | 3 | Oracle Data Guard | Contract only |
+| `standalone` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 1 | None | Contract implemented |
+| `data_guard_physical` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 3 | Oracle Data Guard | Contract only |
 
 The three-member Data Guard count is this repository's supported laboratory
 invariant, not an Oracle Data Guard product minimum.
@@ -113,6 +113,12 @@ Run all checks, including the Oracle Free live proof:
 
 ```bash
 just check
+```
+
+Run only the tracked documentation contract:
+
+```bash
+just docs-check
 ```
 
 The equivalent commands are:

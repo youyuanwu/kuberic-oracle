@@ -48,7 +48,7 @@ The future native-replication profile is separate:
 
 | Area | Future Data Guard contract |
 |---|---|
-| Edition | Enterprise-capable artifact under explicitly approved non-production terms; commercially licensed Enterprise for production |
+| Artifact/profile | Enterprise-capable artifact under explicitly approved non-production terms; `EnterpriseDeveloper` repository profile for non-production research; `Enterprise` profile for production design |
 | Topology | One primary and two physical standbys |
 | Replication | Oracle Data Guard physical standby |
 | Broker | Explicit later design decision |
@@ -371,6 +371,12 @@ see [broker tradeoffs and stop conditions](data-guard-readiness.md#broker-manage
 The future observer will use a dedicated least-privileged principal. It will
 not use `SYS`, `SYSTEM`, or a fixture administration credential.
 
+Observation and mutation authority must use separate principals, credentials,
+and access paths. The observer must be unable to execute SQL, broker/DGMGRL,
+configuration, or fencing mutations. A future mutation principal must be
+available only to an authenticated authorized attempt, never to the periodic
+observation path.
+
 Credentials must be mounted as separate bounded files. Passwords must not
 appear in:
 
@@ -382,9 +388,11 @@ appear in:
 - error values; or
 - ownership journals.
 
-TLS must verify the server certificate chain and configured connection name.
-There will be no plaintext mode or certificate-verification bypass in the
-supported profile.
+Authenticated encryption must verify the peer certificate chain and configured
+immutable member or infrastructure identity for every authority-bearing
+channel: observation, mutation, broker/DGMGRL, operation authorization, and
+fencing. There will be no plaintext mode or certificate-verification bypass in
+the supported profile.
 
 The exact dynamic-performance-view grants will be determined experimentally
 and documented. The observer must fail closed on missing privilege rather than
@@ -510,7 +518,7 @@ does not make it a dependency.
   conditions until an authorized 23-or-later artifact is verified;
 - choose broker-managed or brokerless operation only after the documented
   tradeoffs receive a separate safety review;
-- construct a three-member Enterprise Developer laboratory as a repository
+- construct a three-member Enterprise-capable laboratory as a repository
   support invariant rather than an Oracle product minimum;
 - use the readiness contract's redo transport, apply, gap, lineage, flashback,
   operation-completion, and identity matrices as the minimum evidence set;

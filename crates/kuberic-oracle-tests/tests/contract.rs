@@ -132,14 +132,17 @@ fn free_standalone_profile_is_supported() {
 
 #[test]
 fn free_standalone_profile_requires_one_replica() {
-    assert_eq!(
-        config(EditionProfile::Free, ReplicationProfile::Standalone, 2).validate(),
-        Err(ContractError::UnsupportedReplicaCount {
-            profile: "standalone",
-            expected: 1,
-            actual: 2,
-        })
-    );
+    for actual in [0, 2] {
+        assert_eq!(
+            config(EditionProfile::Free, ReplicationProfile::Standalone, actual,).validate(),
+            Err(ContractError::UnsupportedReplicaCount {
+                profile: "standalone",
+                expected: 1,
+                actual,
+            }),
+            "{actual}"
+        );
+    }
 }
 
 #[test]
@@ -193,20 +196,24 @@ fn fresh_free_primary_observation_is_admitted() {
 
 #[test]
 fn free_standalone_profile_rejects_standby_role() {
-    assert_eq!(
-        admit_observation(
-            &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
-            &target(),
-            &observation(
-                EditionProfile::Free,
-                DatabaseRole::PhysicalStandby,
-                OpenMode::Mounted,
+    for role in [
+        DatabaseRole::PhysicalStandby,
+        DatabaseRole::LogicalStandby,
+        DatabaseRole::SnapshotStandby,
+        DatabaseRole::FarSync,
+    ] {
+        assert_eq!(
+            admit_observation(
+                &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+                &target(),
+                &observation(EditionProfile::Free, role, OpenMode::Mounted),
+                10_000,
+                500,
             ),
-            10_000,
-            500,
-        ),
-        Err(ContractError::UnsupportedDatabaseRole)
-    );
+            Err(ContractError::UnsupportedDatabaseRole),
+            "{role:?}"
+        );
+    }
 }
 
 #[test]

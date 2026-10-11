@@ -9,8 +9,8 @@
 > member and does not implement replication-runtime callbacks.
 >
 > **Licensing:** This document records technical research, not legal advice.
-> Image access and use require repository-owner approval of the exact Oracle
-> terms that apply to the selected artifact.
+> Image access and use require approval by the organization-designated
+> licensing and registry authority for the exact Oracle terms and artifact.
 
 ## Claim labels
 
@@ -28,9 +28,14 @@ verified facts only for the cited version. Binding requirements, allowed and
 forbidden inferences, topology rules, and completion rules are repository
 design choices unless a cell explicitly marks an item unknown.
 
-Facts about the dormant Kuberic preview are verified only for local commits
-`5c202ec` and `b0e96aa`. They remain facts about pinned, incompatible reference
-code, not facts about a production or stable Kuberic API.
+The dormant Kuberic analysis is a **local contextual observation** of full
+commits `5c202ec53104e536568d664dafadfb05f89bdd1a` and
+`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20` from
+`https://github.com/youyuanwu/kuberic.git`. Those objects were available in the
+required adjacent checkout but were not independently retrievable from the
+released `kuberic-oracle` repository. The fit matrix is therefore not an
+authoritative integration baseline. A future integration must publish or
+otherwise preserve the selected upstream objects and repeat the analysis.
 
 ## Current repository boundary
 
@@ -61,6 +66,10 @@ Admission then independently binds DBID, `DB_UNIQUE_NAME`, and the complete
 current-incarnation tuple to the configured target
 ([`observation.rs:9-13`](../crates/kuberic-oracle/src/observation.rs#L9-L13),
 [`observation.rs:41-49`](../crates/kuberic-oracle/src/observation.rs#L41-L49)).
+The server-free tests separately reject a target DBID/name mismatch and every
+field mismatch in the current-incarnation tuple
+([`target_identity_must_match`](../crates/kuberic-oracle-tests/tests/contract.rs#L256-L277),
+[`target_incarnation_must_match_even_when_dbid_matches`](../crates/kuberic-oracle-tests/tests/contract.rs#L280-L309)).
 
 **Verified fact:** the test-only Oracle Free proof shows that a fresh
 image-derived volume can reproduce the same DBID/current-incarnation tuple.
@@ -87,7 +96,7 @@ research profile. The shorthand does not select a license or artifact.
 
 | Path | Sourced fact | Unknown / required decision |
 |---|---|---|
-| OTN developer use | Oracle's agreement permits internal development, testing, prototyping, and demonstration, and excludes data-processing, business, commercial, and production use. It also prohibits third-party distribution and does not include technical support. [Source](https://www.oracle.com/downloads/licenses/standard-license.html) | The repository owner must confirm that the exact selected binary or image is offered under this agreement and that the intended lab use complies. |
+| OTN developer use | Oracle's agreement permits internal development, testing, prototyping, and demonstration, and excludes data-processing, business, commercial, and production use. It also prohibits third-party distribution and does not include technical support. [Source](https://www.oracle.com/downloads/licenses/standard-license.html) | The organization-designated licensing authority must confirm that the exact selected binary or image is offered under this agreement and that the intended lab use complies. |
 | Direct Oracle binary download | Oracle presents a separate software-license acceptance gate for direct downloads. [Source](https://www.oracle.com/downloads/software-license-agreement.html) | The selected database version, platform artifact, retention rules, and applicable terms must be recorded before automation. |
 | Oracle Container Registry | Oracle states that the registry contains licensed and open-source software and that licensed images require login plus acceptance of Oracle Standard Terms and Restrictions. [Source](https://docs.oracle.com/en/operating-systems/oracle-linux/docker/docker-UsingDockerRegistries.html) | The session-protected `database/enterprise` page, exact 23+/26 tag, Linux x86-64 manifest, pull entitlement, redistribution restriction, and digest must be verified by an authorized operator. |
 | Oracle `docker-images` repository | Oracle publishes build files, while the Database image instructions require separately obtained binaries and acceptance of the license attached to those binaries. [Source](https://github.com/oracle/docker-images/tree/main/OracleDatabase/SingleInstance) | This path does not provide a redistributable pre-built Enterprise image. The exact source binary and resulting image handling remain operator responsibilities. |
@@ -99,6 +108,38 @@ configured native major version below 23
 ([`config.rs:38-42`](../crates/kuberic-oracle/src/config.rs#L38-L42)).
 Availability and native evidence must therefore be verified for the selected
 23-or-later artifact, even when a concept is also documented in Oracle 19c.
+
+### Source verification ledger
+
+The following claims were re-checked against the linked Oracle pages on
+2026-10-11. The ledger records the semantic checked; it does not establish
+artifact entitlement, least-privilege grants, or lab behavior.
+
+| Claim | Version/source | Semantic checked | Status |
+|---|---|---|---|
+| Developer-use terms | [OTN agreement](https://www.oracle.com/downloads/licenses/standard-license.html) | Internal development/testing/prototyping/demonstration scope; no production or redistribution; no included support | Verified for the linked agreement |
+| Licensed registry workflow | [Oracle Linux registry documentation](https://docs.oracle.com/en/operating-systems/oracle-linux/docker/docker-UsingDockerRegistries.html) | Licensed images require registry login and acceptance of Oracle Standard Terms and Restrictions | Verified generically; exact `database/enterprise` repository remains unknown |
+| Broker readiness | [Oracle AI Database 26 `VALIDATE DATABASE`](https://docs.oracle.com/en/database/oracle/oracle-database/26/dgbkr/validate-database.html) | Switchover/failover readiness, strict checks, flashback, apply, transport, and gap output | Verified for 26 |
+| Role/readiness values | [Oracle AI Database 26 `V$DATABASE`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-DATABASE.html) | Documented switchover states and database role/protection fields used by this contract | Verified for 26 |
+| Incarnation | [Oracle AI Database 26 `V$DATABASE_INCARNATION`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-DATABASE_INCARNATION.html) | A new incarnation is created when a database is opened with `RESETLOGS` | Verified for 26 |
+| Failover lineage | [Oracle AI Database 26 role transitions](https://docs.oracle.com/en/database/oracle/oracle-database/26/sbydb/managing-oracle-data-guard-role-transitions.html) | Oracle states that failover causes a new incarnation at the primary | Verified for 26 |
+| Transport/apply/gap | [`V$ARCHIVE_DEST_STATUS`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-ARCHIVE_DEST_STATUS.html), [`V$DATAGUARD_PROCESS`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-DATAGUARD_PROCESS.html), [`V$DATAGUARD_STATS`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-DATAGUARD_STATS.html), [`V$ARCHIVE_GAP`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-ARCHIVE_GAP.html) | Existence and described purpose of destination, process, lag, and current blocking-gap evidence | Verified for 26; row cardinality and privilege behavior require separate rules below |
+| Flashback/restart | [`V$FLASHBACK_DATABASE_LOG`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-FLASHBACK_DATABASE_LOG.html), [`V$INSTANCE`](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-INSTANCE.html) | Flashback-log evidence and instance restart/status evidence | Verified for 26 |
+
+### Required licensing approval record
+
+Before an Enterprise artifact is pulled, built, retained, or used, an immutable
+approval record must bind:
+
+- the approving organizational role and approver identity;
+- the exact terms document/revision or captured source and retrieval date;
+- the registry account or other entitlement used;
+- artifact version, platform, tag, digest, and source path;
+- approved purpose and one-primary/two-standby topology;
+- retention, caching, redistribution, and cleanup constraints;
+- approval date, expiry or review date; and
+- invalidation triggers, including changed terms, artifact digest, account,
+  topology, purpose, or selected Oracle version.
 
 ### Supported lab topology
 
@@ -180,6 +221,28 @@ must produce an ambiguous or fail-closed result.
 | Restart/connection session | `V$INSTANCE.STARTUP_TIME`, instance name/host/status; observer connection/session identity retained by the future host. [26 reference](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/V-INSTANCE.html) | Restart evidence is separate from database lineage; connection identity is separate from Kuberic process session. | Instance restart and observation-session continuity. | Database replacement, storage replacement, or Kuberic process identity. |
 | Storage identity | No Oracle-native storage identity is admitted by this contract. | Require external volume/PVC/deployment identity and ownership evidence. | External evidence that a particular deployment/storage allocation was observed. | Oracle DBID/incarnation proves storage continuity or clone uniqueness. |
 
+### Selected-version row and absence semantics
+
+Each future query contract must define row count and absence separately. A
+missing row, `NULL`, duplicate, disabled process, disconnected destination,
+unsupported view, and privilege denial are different facts and must not share
+one fallback.
+
+| Source | Current readiness rule |
+|---|---|
+| `V$DATABASE` | Exactly one whole-database row for the bound target; zero or multiple rows fail closed. |
+| Current `V$DATABASE_INCARNATION` | Exactly one `STATUS='CURRENT'`, whole-database row for the bound target; zero, multiple, or identity mismatch fails closed. |
+| `V$INSTANCE` | Exactly one bound instance row for the configured member in the initial single-instance lab; RAC is out of scope. |
+| `V$ARCHIVE_DEST_STATUS` | Expected destination IDs and count are **unknown** until the topology and destination policy are selected. Missing, duplicate, disabled, or error rows fail closed unless the selected-version contract assigns an explicit meaning. |
+| `V$DATAGUARD_PROCESS` | Expected process set and multiplicity are **unknown** until the selected-version apply/transport mode is fixed. Absence is not interpreted as idle or healthy by default. |
+| `V$DATAGUARD_STATS` | Metric names, row presence by role, `NULL`, and stale computation times require a selected-version rule. Missing metrics do not become zero lag. |
+| `V$ARCHIVE_GAP` | Oracle documents the view as the current gap blocking recovery. Zero rows may be treated only as “no current blocking gap reported” after selected-version verification; it is not proof that transport/apply is healthy. Multiple or changing rows require resampling. |
+| Broker output | Required sections, member count, warning/error handling, and sample age require a versioned parser contract. Missing text, unknown enum values, or database-view disagreement is ambiguous. |
+
+Privilege denial, query error, unsupported columns, and failure to complete the
+identity bracket are errors for every source; they are never equivalent to an
+empty healthy result.
+
 ### Target-version rule
 
 The URLs above are Oracle AI Database 26 sources where available. Any future
@@ -192,17 +255,27 @@ implementation.
 ## Exact operation-completion matrix
 
 Native state is necessary but does not identify this repository's request or
-attempt. A future completion record would need a repository-generated request
-ID, monotonic revision, input digest, attempt/session identity, target native
-identity, external deployment/storage identity, precondition snapshot, and
-postcondition snapshot. None exists today.
+attempt. Every operation row inherits one mandatory completion envelope:
+
+- repository-generated operation ID and monotonic revision;
+- canonical input digest and replay classification;
+- attempt/process-session identity;
+- exact target Oracle database/member and pre-operation lineage;
+- exact external deployment/storage identity;
+- precondition snapshot and postcondition snapshot; and
+- authenticated authorization plus a durable operation journal.
+
+A reused operation ID with a different revision, digest, target, storage
+identity, or attempt cannot satisfy completion. The table below lists
+operation-specific additions; none of the common envelope is optional. No such
+runtime record exists today.
 
 | Operation | Required preconditions | Required native postconditions | Required external/repository evidence | Exact outcome rules |
 |---|---|---|---|---|
-| Switchover | Identity-bracketed primary/target/by-stander evidence; no unresolved gap; supported protection/transport/apply state; readiness for both roles. | Old primary is the intended physical standby; intended standby is primary; required transport/apply paths are healthy; all members remain in compatible lineage. A role exchange alone does not prove or require a new RESETLOGS incarnation. | Exact request/revision/input digest; operation journal; same attempt across both role observations; target deployment/storage identities. | `succeeded` only when every bound postcondition is met. `failed` requires an attributable terminal error with no unexplained authority change. `ambiguous` covers any unexplained role state, stale sample, or missing causality. `cancelled` is unknown until sourced and cannot be inferred from a cancellation request. `rebuild-required` applies when a member cannot rejoin the retained lineage without replacement. |
-| Failover | Primary loss/unavailability evidence; selected target identity; declared data-loss policy; bystander compatibility; independent old-primary fencing plan. | Target is primary; current incarnation/resetlogs and data-loss boundary are retained; viable bystanders point to the new authority or are explicitly disabled/rebuild-required. | Exact request/attempt; fencing proof; pre-failover evidence; post-failover deployment/storage identities; recorded operator authorization. | No success without fencing. `succeeded` requires the exact target and declared data-loss result. `failed` requires an attributable terminal error with no promoted authority. A primary role alone or uncertain fencing is `ambiguous`. Incompatible retained history is `rebuild-required`. `cancelled` is unknown until sourced and cannot be inferred after authority may have changed. |
-| Reinstate | Exact failed-over configuration; former-primary identity; flashback and retention evidence where broker reinstate is used; no conflicting authority. | Former primary returns as the intended standby, in compatible post-failover lineage, with transport/apply healthy. | Exact reinstate request/attempt and former-primary deployment/storage identity. | `succeeded` requires attributable membership and apply health. Broker/database command failure is `failed` only when tied to the attempt. Missing causality is `ambiguous`; incompatible lineage or insufficient flashback requires `rebuild-required`. `cancelled` is unknown until sourced and cannot be inferred from caller cancellation alone. |
-| Rebuild | Typed reason the old member cannot be retained; new empty target deployment/storage identity; authorized source and target; old member retired. | New member has the intended `DB_UNIQUE_NAME`, standby role, compatible lineage, and healthy transport/apply. | Exact source/target identities, new storage identity, copy/build attempt journal, validation sample, and retirement evidence for the old allocation. | Native rebuild-completion semantics are **unknown**. Future `succeeded` requires every attempt-bound postcondition and retirement proof; a healthy-looking standby alone is not success. An attributable terminal copy/build error is `failed`; missing causality is `ambiguous`; conflicting history or reused storage is `rebuild-required`; and `cancelled` remains unknown until sourced. |
+| Switchover | Identity-bracketed primary/target/by-stander evidence; no unresolved gap; supported protection/transport/apply state; readiness for both roles. | Old primary is the intended physical standby; intended standby is primary; required transport/apply paths are healthy; all members remain in compatible lineage. A role exchange alone does not prove or require a new RESETLOGS incarnation. | Same attempt across both role observations and routing evidence when routing is later supported. | `succeeded` only when every bound postcondition is true and no unreconciled terminal error exists. `failed` requires an attributable terminal error **and** proof that success postconditions did not occur. If success effects coexist with an error or acknowledgement is lost, the result is `ambiguous`. `cancelled` is unknown until sourced and cannot be inferred from a cancellation request. `rebuild-required` applies when a member cannot rejoin retained lineage. |
+| Failover | Primary loss/unavailability evidence; selected target identity; declared data-loss policy; bystander compatibility; independently verifiable old-primary fencing proof. | Target is primary; Oracle 26 documents a new primary incarnation after failover, so pre- and post-failover incarnation/resetlogs evidence must be retained; the declared data-loss boundary is recorded; viable bystanders point to the new authority or are explicitly disabled/rebuild-required. [26 source](https://docs.oracle.com/en/database/oracle/oracle-database/26/sbydb/managing-oracle-data-guard-role-transitions.html) | Before dispatch: authenticated fencing proof bound to the exact old-primary database, deployment/storage identity, candidate, and operation attempt. After dispatch: retain that proof with post-failover evidence and operator authorization. | Required order: `fence-requested → fence-verified → promotion-authorized → promotion-dispatched`. `succeeded` requires the exact target, new-incarnation evidence, declared data-loss result, and retained fencing proof. `failed` requires an attributable terminal error with no promoted authority. A primary role alone, uncertain fencing, or lost causality is `ambiguous`. Incompatible history is `rebuild-required`; cancellation is unknown after authority may have changed. |
+| Reinstate | Exact failed-over configuration; former-primary identity; flashback and retention evidence where broker reinstate is used; no conflicting authority. | Former primary returns as the intended standby, in compatible post-failover lineage, with transport/apply healthy. | Exact former-primary deployment/storage identity and reinstate-specific validation. | `succeeded` requires every bound postcondition and no unreconciled terminal error. `failed` requires an attributable terminal error and proof that success postconditions did not occur. Success effects plus an error or missing acknowledgement is `ambiguous`; incompatible lineage or insufficient flashback is `rebuild-required`; cancellation remains unknown until sourced. |
+| Rebuild | Typed reason the old member cannot be retained; new empty target deployment/storage identity; authorized source and target; old member retired. | New member has the intended `DB_UNIQUE_NAME`, standby role, compatible lineage, and healthy transport/apply. | Exact source/target identities, new storage identity, copy/build validation, and retirement evidence for the old allocation. | Native rebuild-completion semantics are **unknown**. Future `succeeded` requires every bound postcondition, retirement proof, and no unreconciled terminal error. `failed` requires an attributable terminal error and proof that success effects did not occur. A healthy-looking standby, mixed success/error evidence, or lost acknowledgement is `ambiguous`; conflicting history or reused storage is `rebuild-required`; cancellation remains unknown until sourced. |
 
 The five result classes used for fit analysis are `succeeded`, `failed`,
 `ambiguous`, `cancelled`, and `rebuild-required`. These are design categories,
@@ -219,7 +292,7 @@ not implemented Oracle operations.
 | Oracle observer connection | Future driver/session identifier and sample bracket | One observation attempt | Kuberic process session or durable operation attempt |
 | Kuberic resource/history | Dormant `ResourceUid`, `Epoch` | Preview lifecycle and authority domains | Oracle DBID/incarnation/SCN |
 | Kuberic replica | Dormant logical replica, instance ID, agent generation | Exact preview replica incarnation | Oracle `DB_UNIQUE_NAME` or fixture container |
-| Kuberic process session | Dormant `ProcessSessionId` | One preview process/Open/report authority session | Oracle instance startup or SQL connection |
+| Kuberic process session | Dormant `ProcessSessionId` | One upstream identity with two uses: hosting/Open lifetime and intent/report authority | Oracle instance startup, Oracle connection session, or repository operation attempt |
 | Kuberic storage | Dormant `PvcUid` and build authorization | Preview durable allocation and copy target | Oracle DBID/incarnation |
 | Fixture/deployment | Container, volume, network, endpoint, owner token, future Pod/PVC/deployment IDs | External ownership and allocation evidence | Oracle-native lineage or Kuberic history |
 
@@ -227,36 +300,62 @@ The Oracle Free clone result is the concrete non-substitution proof: an
 image-derived fresh volume may retain indistinguishable DBID/current-
 incarnation evidence while container and volume identity change.
 
+## Principal and transport separation
+
+**Repository design choice:** observation and mutation must use separate
+principals, credential files, and access paths.
+
+- The observation principal is read-only and must be unable to execute role
+  changes, broker/DGMGRL mutations, configuration changes, or fencing actions.
+- A future mutation principal is unavailable to the periodic observation path,
+  loaded only for an authenticated authorized attempt, and scoped to the
+  selected protocol and target identities.
+- A future authorization/fencing principal is separate from both database
+  principals when the fencing system is external.
+- Tests for a future implementation must include a deny matrix proving that
+  each principal cannot exercise the other principals' authority.
+
+Authenticated encryption and peer-name verification are mandatory for every
+authority-bearing channel in every supported profile: observation, mutation,
+broker/DGMGRL, operation authorization, and fencing. Peer identity must bind to
+the configured immutable database/member or infrastructure identity rather
+than a mutable endpoint name alone. This phase does not implement TLS or select
+the trust model.
+
 ## Dormant Kuberic Public V1 fit/no-fit
 
-This section uses only local commits `5c202ec` and `b0e96aa`, inspected as
-`<sha>:<path>`. The pinned design calls the preview dormant and incompatible,
+This section uses only local commits
+`5c202ec53104e536568d664dafadfb05f89bdd1a` and
+`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20`, inspected as
+`<full-sha>:<path>`. The pinned design calls the preview dormant and incompatible,
 assigns it protocol 11/schema 8 while production remains protocol 9/schema 6,
 and states that it has no storage-migration contract and may require a fresh
 preview store
-(`b0e96aa:docs/features/kuberic/replicator-boundary.md:148-154`).
+(`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:docs/features/kuberic/replicator-boundary.md:148-154`).
 Production normalization rejects Public V1 status
-([`b0e96aa:kuberic-controller/src/normalize.rs:87-97`]) and preview storage has
+([`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-controller/src/normalize.rs:87-97`]) and preview storage has
 no cross-version opener
-([`b0e96aa:kuberic-runtime/src/host/tests/public_operations.rs:263-304`]).
+([`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/host/tests/public_operations.rs:263-304`]).
 The pinned design also states that Phase 5 has not selected a replacement
 Replicator or changed the legacy production path
-(`b0e96aa:docs/features/kuberic/replicator-boundary.md:189-190`). The preview
-is therefore disposable reference evidence, not a migration target. Later
-preview changes were not reviewed; targeting them requires a new analysis.
+(`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:docs/features/kuberic/replicator-boundary.md:189-190`). The preview
+is therefore disposable contextual reference evidence, not an independently
+retrievable release baseline or migration target. Later preview changes were
+not reviewed; targeting them requires publication/preservation of the selected
+objects and a new analysis from a clean checkout.
 
 | Concept | Pinned preview evidence | Data Guard fit | Blocker / upstream decision |
 |---|---|---|---|
-| Resource | `ResourceUid` and lifecycle generation (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:57-77`) | Fit for binding one hosted integration resource. | No production Public V1 resource contract is selected. |
-| History | `Epoch { data_loss_number, configuration_number }` (`b0e96aa:kuberic-runtime/src/protocol/types.rs:121-136`) | Partial fit: Data Guard failover/configuration changes need separate authority dimensions. | Oracle incarnation/resetlogs cannot be declared equivalent to `Epoch`; admission rules need upstream definition. |
-| Replica | `ReplicaIdentity` separates logical replica, instance, and durable generation (`b0e96aa:kuberic-runtime/src/protocol/types.rs:181-186`) | Conceptual fit for primary/standby member incarnations. | Mapping from Oracle member plus deployment identity is unselected. |
-| Process | Public reports bind a process session (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:1067-1086`) | Fit for one hosted process/Open attempt. | Oracle instance identity is not this identity. |
-| Session | `ProcessSessionId` also binds intents and reports (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:351-365`) | Partial fit for exact attempt/report authority. | Oracle connection sessions and repository operation attempts remain separate. |
-| Storage | `PvcUid` binds build source and target storage (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:576-610`) | Strong conceptual fit for external storage evidence and rebuild targets. | The preview storage model is dormant and non-migratable. |
-| Evidence | Public V1 rejects legacy/native evidence fields (`b0e96aa:kuberic-runtime/src/control/convert.rs:182-277,344-379`) | No fit for transporting the full Oracle evidence matrix directly. | A future extension contract or separate evidence channel is required. |
-| Progress | `PublicProgress { role, first, last }` (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:998-1026`) | No safe direct fit: Oracle evidence is multidimensional. | No SCN-to-LSN/range conversion is allowed. |
-| Exact completion | Completion retains operation ID, revision, input digest, replay disposition, and a typed result (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:1030-1046`) | Strong conceptual fit for repository attempt-bound outcomes. | Oracle-native state cannot populate exact completion without a repository journal and a selected upstream contract. |
-| Rebuild | Typed rebuild-required reasons and exact local storage (`b0e96aa:kuberic-runtime/src/protocol/public_operations.rs:935-992`) | Conceptual fit for incompatible history and replacement storage. | Oracle-specific history admission and source/target authorization remain undesigned. |
+| Resource | `ResourceUid` and lifecycle generation (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:57-77`) | Fit for binding one hosted integration resource. | No production Public V1 resource contract is selected. |
+| History | `Epoch { data_loss_number, configuration_number }` (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/types.rs:121-136`) | Partial fit: Data Guard failover/configuration changes need separate authority dimensions. | Oracle incarnation/resetlogs cannot be declared equivalent to `Epoch`; admission rules need upstream definition. |
+| Replica | `ReplicaIdentity` separates logical replica, instance, and durable generation (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/types.rs:181-186`) | Conceptual fit for primary/standby member incarnations. | Mapping from Oracle member plus deployment identity is unselected. |
+| Process | Public reports use `ProcessSessionId` for one hosted process/Open lifetime (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:1067-1086`). | Fit for one hosted process/Open attempt. | This is one use of the same upstream type named in the next row; Oracle instance identity is not this identity. |
+| Session | The same `ProcessSessionId` binds intents and reports (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:351-365`). | Partial fit for intent/report authority within that process session. | Oracle connection sessions and repository operation attempts remain separate identities. |
+| Storage | `PvcUid` binds build source and target storage (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:576-610`) | Strong conceptual fit for external storage evidence and rebuild targets. | The preview storage model is dormant and non-migratable. |
+| Evidence | Public V1 rejects legacy/native evidence fields (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/control/convert.rs:182-277,344-379`) | No fit for transporting the full Oracle evidence matrix directly. | A future extension contract or separate evidence channel is required. |
+| Progress | `PublicProgress { role, first, last }` (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:998-1026`) | No safe direct fit: Oracle evidence is multidimensional. | No SCN-to-LSN/range conversion is allowed. |
+| Exact completion | Completion retains operation ID, revision, input digest, replay disposition, and a typed result (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:1030-1046`) | Strong conceptual fit for repository attempt-bound outcomes. | Oracle-native state cannot populate exact completion without a repository journal and a selected upstream contract. |
+| Rebuild | Typed rebuild-required reasons and exact local storage (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:935-992`) | Conceptual fit for incompatible history and replacement storage. | Oracle-specific history admission and source/target authorization remain undesigned. |
 | Hosting | No selected replacement replication implementation; production rejects the preview. | No fit for Oracle Free replication callbacks. | Upstream must provide or select a stable observation-only hosting boundary before Oracle Free integration. |
 
 ### Oracle Free hosting decision
@@ -274,8 +373,9 @@ stopped.
 Implementation or a stronger support claim must stop when any condition below
 is unresolved:
 
-1. **Licensing:** the repository owner has not approved the exact terms and
-   intended use for the selected artifact.
+1. **Licensing:** the organization-designated licensing/registry authority has
+   not produced the required immutable approval record for the exact terms,
+   artifact, topology, and intended use.
 2. **Distribution:** the selected 23-or-later Enterprise-capable image or
    binary, platform, tag, digest, pull entitlement, and retention/redistribution
    constraints are not recorded.
@@ -296,12 +396,34 @@ is unresolved:
    required postconditions; the result must remain ambiguous.
 10. **Reinstate/rebuild:** required flashback, history admission, new-storage,
     retirement, and completion evidence is unsourced or unavailable.
-11. **Privilege/security:** least-privilege observation and mutation grants,
-    credential handling, and production TLS are not separately designed.
+11. **Privilege/security:** separate observation, mutation, and external
+    authorization/fencing principals; deny rules; credential handling; and
+    authenticated encrypted channels with peer-name verification are not
+    separately designed.
 12. **Upstream contract:** the replacement Kuberic public contract and
-    observation-only hosting boundary are not stable and selected.
+    observation-only hosting boundary are not stable and selected, or the
+    selected upstream objects are not durably retrievable for independent
+    review.
 13. **Oracle Free:** any design would make Free electable, mutable,
     replicated, or Data Guard capable.
+
+### Stop-condition closure record
+
+A future implementation PR may close a stop condition only with a versioned,
+durable record containing:
+
+- gate identifier and current state;
+- accountable owner and approving authority;
+- immutable evidence identifiers or captured source;
+- Oracle version, artifact digest, topology, and upstream-contract fingerprint;
+- decision date and validity/review window;
+- verification command or procedure and result;
+- dependencies on other gates; and
+- reopen triggers such as changed terms, artifact, topology, upstream
+  contract, credentials, fencing mechanism, or evidence semantics.
+
+Missing, expired, mismatched, or reopened records leave the gate blocked. PAW
+artifacts are not that durable record and remain uncommitted.
 
 ## What this phase proves
 
