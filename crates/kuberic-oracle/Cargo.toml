@@ -8,6 +8,13 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+kuberic = ["dep:async-trait", "dep:kuberic-runtime", "dep:tokio"]
+
 [dependencies]
+async-trait = { workspace = true, optional = true }
+kuberic-runtime = { workspace = true, optional = true }
 serde.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, optional = true }

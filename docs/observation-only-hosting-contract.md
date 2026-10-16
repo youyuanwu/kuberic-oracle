@@ -1,203 +1,162 @@
-# Observation-Only Hosting Contract
+# Oracle Free Custom Replicator Contract
 
-> **Status:** kuberic-oracle proposal only. The selected Kuberic Public V1
-> baseline does not contain this hosting interface. No Oracle runtime adapter,
-> Kuberic dependency, transport, credential, TLS, election, mutation, or Data
-> Guard implementation is added by this document.
+> **Status:** Implemented as the optional `kuberic` feature in the production
+> crate. The implementation supplies a custom singleton Kuberic Replicator
+> around an injected observation source. It adds no production Oracle driver,
+> runtime executable, plaintext production connection, container authority,
+> Oracle mutation, election, failover, or Data Guard behavior.
 
 ## Selected upstream facts
 
-The independently reviewable upstream baseline for this document is
-`youyuanwu/kuberic` commit
-`28b181bb1846d057cce5913513a46ed72de4c977`. Citations use the immutable form
+The independently reviewable upstream baseline is `youyuanwu/kuberic` commit
+`28b181bb1846d057cce5913513a46ed72de4c977`. The Cargo dependency is pinned to
+that exact revision. Citations use the immutable form
 `<commit>:<path>:<line-range>`.
 
 | Selected fact | Immutable upstream evidence |
 |---|---|
 | Public V1 protocol `11` and local agent schema `12` are the selected production contract. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58` |
-| The built-in path is the sole Public V1 path; legacy/preview engines, selectors, and fallback are removed or rejected. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:34-36`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:68-75`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:5-8`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:16-23`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:17-20`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:500-525`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:663-672` |
-| The public SF-shaped application surface includes `StatefulServiceReplica`, `StateProvider`, `Replicator`, `PrimaryReplicator`, optional `StateReplicator`, and `ReplicatorFactory`; the runtime carries `ReplicatorInterfaces` and immutable `ReplicatorCapabilities`. | `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:6-15`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-107`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:128-168`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:184-343`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:955-961` |
-| Public identities and semantics include `PublicV1Identity`, `Epoch`, `ReplicaRole`, `ReplicaIdentity`, `ReplicaStorageIncarnationContext`, `ProcessSessionEndpoint`, `HistoryContext`, `INVALID_LSN`, configuration and replica-set shapes, role/epoch/progress/configuration/build/remove callbacks, data-loss authorization, replay classification, and exact operation completion. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:20-24`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:142-208`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:340-406`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:339-417`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:420-500`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:775-796`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:992-1055`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2154-2195`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2200-2247`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:11-29`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:44-83` |
-| `StatefulServiceReplica::open` must return a `Replicator`; completion certifies operation-specific postconditions rather than transport acknowledgement. There is no truthful observation-only hosted interface. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:45-59`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:13-30`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:44-67` |
-| PostgreSQL is the native custom-Replicator reference. It returns a service-owned `PgReplicator`, supplies neither a `StateProvider` nor a `StateReplicator`, and owns its replication/copy state. It is an active replication implementation, not an observation-only adapter. | `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/postgres/design.md:21-28`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:109-165`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-250`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:260-291`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:79-89` |
-| Public V1 conformance recognizes only `postgresql` and `built-in-replacement`; literal selector and scenario matches provide no normal registration path for a third custom subject. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:915-1002`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/tests/public_v1_conformance.rs:1-12` |
-| The built-in Public V1 replication path has no credential contract. Custom Replicators may own their own transport and storage formats; the PostgreSQL example's credentials and transport are PostgreSQL-specific. | `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:70-82`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:73-83`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:129-137`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/postgres/design.md:286-296`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/public_transport.rs:23-50`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/public_transport.rs:64-125`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/public_transport.rs:185-193` |
-| Kuberic remains experimental and source-only, without published production images, a supported installation, or a production activation/traffic-movement procedure. | `28b181bb1846d057cce5913513a46ed72de4c977:README.md:3-5`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:160-170` |
+| The built-in path is the sole selected built-in Public V1 path; legacy/preview selectors and fallback are removed or rejected. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:34-36`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:68-75`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:500-525`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:663-672` |
+| Every hosted `StatefulServiceReplica::open` returns a `Replicator`; custom implementations may provide a `PrimaryReplicator` while omitting `StateProvider` and `StateReplicator`. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-107`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:128-168`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:609-688`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:955-961` |
+| Zero is a valid empty-history boundary; `INVALID_LSN = -1` means progress is unknown or inapplicable and cannot be reported as completed progress. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:20-24`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2154-2195` |
+| PostgreSQL is the selected application-owned custom-Replicator reference. It returns a service-owned Replicator and supplies neither a `StateProvider` nor a `StateReplicator`. | `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:109-165`; `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:79-89` |
+| Public V1 conformance subject selection recognizes only `postgresql` and `built-in-replacement`. Oracle therefore uses repository-owned contract tests rather than claiming registration in the upstream generic suite. | `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:915-1002`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/tests/public_v1_conformance.rs:1-12` |
+| Kuberic remains experimental and source-only, without published production images, a supported installation, or a production activation procedure. | `28b181bb1846d057cce5913513a46ed72de4c977:README.md:3-5`; `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:160-170` |
 
-These are selected upstream facts. The remainder of this document is a
-kuberic-oracle proposal and must not be read as an API that exists in Kuberic.
+## Implemented boundary
 
-## Proposed generic hosting boundary
+The adapter treats Oracle Free as an external observed database and the
+Kuberic Replicator as a singleton host-lifecycle contract. The Replicator does
+not claim that Oracle Free performs native replication.
 
-The proposal is for external engines that can report trustworthy bounded
-observations but cannot truthfully implement replication, election, or
-configuration authority. Oracle Free is the motivating consumer, not a
-special-case API. The same boundary must be usable by any external
-observe-only engine.
+The implementation has four components:
 
-### Lifecycle
+- `OracleObservationSource` supplies one fresh `OracleObservation`. No
+  production implementation is included.
+- `OracleService` implements `StatefulServiceReplica`, validates resource
+  identity, owns terminal lifecycle, and returns no client service address.
+- `OracleReplicatorFactory` binds exact replica and process-session identity,
+  rejects a supplied `StateProvider`, and returns a conservative primary
+  interface bundle without a `StateReplicator`.
+- `OracleReplicator` validates every supported callback against fresh Oracle
+  admission within the configured observation timeout and rejects unsupported
+  replication and authority operations.
 
-The complete lifecycle contains exactly four operations:
+The optional `kuberic` feature is disabled by default. Enabling it adds the
+exact Kuberic source dependency and adapter types, but it does not add an
+Oracle driver or executable.
 
-1. **Open** — bind one hosted observation session to the complete identity
-   tuple and immutable capabilities. Open returns an opaque in-process session
-   handle, not a service or replication address.
-2. **Observe** — execute one fresh, bounded observation and publish explicit
-   health plus evidence through exact completion.
-3. **Close** — reject new observations, resolve every accepted observation,
-   release session resources, and complete only after no result from that
-   session can still be published.
-4. **Abort** — immediately make the session terminal, cancel or abandon
-   in-flight work, and prevent every later result from being published.
-   Repeated Abort calls are idempotent.
+## Callback contract
 
-There are no role, epoch, progress, configuration, build, catch-up, remove,
-data-loss, election, promotion, switchover, failover, or replication
-callbacks. Unsupported behavior is absent from the interface rather than
-represented by a callback that returns success.
+| Public V1 callback | Oracle Free behavior |
+|---|---|
+| Application Open | Validate Kuberic resource identity, allocate one service-owned custom Replicator, and bind the exact Open replica identity. |
+| Factory creation | Bind the exact replica and process-session identities plus the configured Kuberic Replicator address; reject a `StateProvider`. |
+| Replicator Open | Enter the open generation and return the configured Kuberic Replicator address. This is not an Oracle listener, client address, or Data Guard endpoint. |
+| Primary role | Require a fresh admitted Oracle Free observation for the configured DBID, `DB_UNIQUE_NAME`, incarnation, edition, version, `PRIMARY` role, and `READ WRITE` mode. |
+| None role | Revoke published application role without changing Oracle. |
+| Active/idle secondary | Reject explicitly; Oracle Free is not a Kuberic secondary or build target. |
+| Current configuration | Accept only one exact local Primary member, write quorum one, and zero remote replica descriptions. Exact replay is allowed; replacement is rejected. |
+| Current progress | Return `0` only after fresh Oracle admission. Zero represents empty adapter-owned Kuberic history, not Oracle SCN or redo progress. |
+| Catch-up capability | Return `INVALID_LSN` after fresh admission because peer catch-up is inapplicable. |
+| Epoch update | Admit only the already-bound epoch; reject an epoch change that could grant new authority. |
+| Catch-up configuration/quorum | Reject explicitly. |
+| Data loss | Reject explicitly rather than certifying Oracle data-loss safety. |
+| Build/remove | Reject explicitly. |
+| Close/Abort | Advance the terminal generation so an in-flight observation cannot publish late success. |
 
-### Identity binding
+Callbacks never issue SQL mutation. The injected source may obtain native
+evidence only through the fixed read-only observation contract.
 
-Open binds four Kuberic hosting identities as independent fields:
+## Progress domains
 
-- resource identity;
-- logical replica identity;
-- process-session identity; and
-- storage-incarnation identity.
+The adapter has an empty Kuberic application-history domain. Its completed
+progress is therefore zero.
 
-Every Observe request and completion repeats the exact tuple. A completion is
-stale and unusable when any field differs from the currently open session.
-The storage-incarnation identity changes on replacement or re-creation even
-when the deployment name or engine-native identity appears unchanged.
+Oracle-native values remain separate evidence:
 
-Engine-native and external identities remain separate evidence domains:
+- `CURRENT_SCN`;
+- resetlogs change and resetlogs ID;
+- activation number;
+- database incarnation;
+- DBID and `DB_UNIQUE_NAME`; and
+- instance startup identity.
 
-- Oracle database identity: DBID, database name, and `DB_UNIQUE_NAME`;
-- Oracle lineage identity: incarnation and resetlogs evidence;
-- Oracle instance identity: instance name, host, and startup time;
-- Oracle observer identity: the process/connection/sample attempt producing
-  evidence;
-- deployment identity: Pod, container, VM, or other allocation identity; and
-- external storage identity: PVC, volume, disk, or equivalent allocation.
+None is cast, truncated, hashed, saturated, or otherwise converted into
+Kuberic LSN, epoch, history, quorum, catch-up, or promotion authority.
+`INVALID_LSN` is used only for the inapplicable catch-up capability; it is not
+reported as completed progress.
 
-No Oracle, Kuberic, observer, deployment, or storage identity may substitute
-for another. A stable DBID does not prove stable storage; an Oracle startup
-time is not a Kuberic process session; a deployment name is not a replica or
-database identity.
+## Identity and configuration binding
 
-### Bounded observation and publication
+Application Open binds the Kuberic resource and exact replica identity.
+Factory creation independently binds the admitted process session and requires
+the same replica identity and Replicator address. A changed identity, session,
+or address fails closed.
 
-An Observe request contains:
+Current configuration admission requires:
 
-- a caller-generated observation request ID;
-- the bound resource, replica, process-session, and storage-incarnation tuple;
-- an absolute completion deadline;
-- a maximum acceptable evidence age; and
-- the expected engine target identity.
+- exactly one member;
+- the member is the locally bound exact replica identity;
+- the member role is `Primary`;
+- the descriptor primary ID is the local replica ID;
+- write quorum is one; and
+- there are no remote peer descriptions.
 
-One completion contains:
+The host retains its own storage-incarnation and Public V1 history domains.
+Oracle DBID, incarnation, startup identity, deployment identity, and storage
+identity remain separate and cannot substitute for one another.
 
-- the same request and identity tuple;
-- observer attempt identity;
-- started, observed, and completed timestamps;
-- explicit engine health and evidence health;
-- separate `deadline_met` and `maximum_age_met` decisions;
-- the exact engine-native identity and lineage snapshot;
-- an evidence digest or durable reference; and
-- one exact disposition: `succeeded`, `failed`, `cancelled`, or `ambiguous`.
+## Freshness and lifecycle fencing
 
-`succeeded` is valid only when the evidence belongs to the bound identities,
-both bounds are met, publication wins all cancellation/Close/Abort races, and
-the complete evidence payload is committed atomically. A deadline miss or
-over-age sample publishes the failed bound and cannot reuse cached success.
+Primary role, epoch, progress, catch-up-capability, and current-configuration
+callbacks obtain a new injected observation and run the existing
+`admit_observation` checks. Failed, stale, future-dated, wrong-identity,
+wrong-incarnation, wrong-edition, wrong-version, standby, or non-`READ WRITE`
+evidence rejects the callback. The adapter wraps acquisition in its own
+nonzero timeout; a stalled source fails as a deadline error even if the source
+does not enforce its own bound.
 
-`failed` requires an attributable terminal fault and proof that no success was
-published. `cancelled` requires proof that cancellation won before
-publication. `ambiguous` is mandatory when the host cannot prove whether a
-result was published; ambiguous evidence cannot update health, readiness, or
-authority state.
+Every asynchronous callback captures the current open generation. Close or
+Abort changes that generation before terminal completion. A delayed
+observation may finish its external work, but it cannot publish callback
+success after the generation changes.
 
-### Cancellation, restart, replacement, and faults
+## Addresses and publication
 
-- **Cancellation:** request-scoped cancellation is monotonic. A completion
-  arriving after cancellation may succeed only when publication was already
-  atomically committed before cancellation won; otherwise it is cancelled or
-  ambiguous, never late success.
-- **Process restart:** every Open uses a new process-session identity.
-  Results from an earlier process session are stale even if all other
-  identities match.
-- **Stale session:** after Close or Abort completes, the host rejects all new
-  requests and discards every late completion from that session.
-- **Storage replacement:** a changed storage-incarnation identity invalidates
-  prior evidence. Matching database or deployment names do not override that
-  invalidation.
-- **Fault:** a session fault stops new observations and makes unresolved
-  attempts failed or ambiguous according to publication evidence. Fault
-  handling cannot convert partial work into success.
-- **Close race:** Close completes only after every accepted request has an
-  exact terminal disposition and the publication channel is sealed.
-- **Abort race:** Abort seals publication first, then cancels and releases
-  work. It does not wait for engine cleanup to claim observation success.
+`RoleChange.service_address` is always `None`; the adapter publishes no Oracle
+client endpoint and no Oracle client service address.
 
-### Addresses and capability absence
+Public V1 nevertheless requires `Replicator::open` to return the configured
+Kuberic Replicator address. For this singleton profile it is host metadata,
+not an Oracle address and not evidence of a replication listener. Any
+configuration containing a remote peer is rejected before catch-up, build, or
+peer communication can be admitted.
 
-Open publishes neither a client service address nor a replication endpoint.
-An implementation may use a private in-process control handle, but that handle
-is not routable application or peer-replication metadata.
+## Production and test boundary
 
-Capabilities are immutable for the Open session and declare only bounded
-observation and health/evidence publication. The following capabilities are
-explicitly absent:
+Production code now contains the feature-gated adapter contract but still has:
 
-- role and epoch management;
-- generic LSN or progress reporting;
-- previous/current replica-set configuration;
-- catch-up capability or quorum waiting;
-- build, copy, remove, or replacement authority;
-- data-loss callbacks or authorization;
-- election, promotion, switchover, or failover;
-- client routing; and
-- replication transport.
+- no Oracle driver;
+- no runtime executable;
+- no credential reader;
+- no live connection path;
+- no container or package authority; and
+- no plaintext production mode.
 
-Absence is not encoded as `INVALID_LSN`, zero, last-known progress, an empty
-endpoint, a healthy listener, or a successful no-op. No Oracle Free adapter may
-implement a fake `Replicator` to enter this hosting path.
+The existing `oracledb` dependency and plaintext connection remain in the test
+crate and are restricted to the fixture-owned loopback worker. A future
+production observation source requires a separately reviewed non-plaintext
+transport and deployment design.
 
-## Minimal proposed upstream changes
+## Data Guard separation
 
-This section is proposal-only. It does not claim that any item exists at the
-selected Kuberic commit.
+This singleton adapter keeps Oracle Free mutation-free and Data Guard-free. It
+does not make Oracle Free electable, replicated, or Data Guard capable and
+supplies no secondary, catch-up, build, removal, data-loss, promotion,
+switchover, failover, reinstate, or routing behavior.
 
-1. **Add a separate generic observation-only hosted interface.** Reuse the
-   selected resource, replica, process-session, and storage-incarnation
-   identity types, but return an observation session rather than a
-   `Replicator`. The only operations are Open, Observe, Close, and Abort.
-2. **Add an immutable hosting-capability variant.** Represent replicated and
-   observation-only hosting as distinct variants. The observation-only variant
-   exposes bounded observation and health/evidence publication while making
-   replication, authority, address, and progress capabilities structurally
-   absent.
-3. **Make conformance subjects registrable.** Replace the literal
-   `postgresql` / `built-in-replacement` selection with a subject descriptor
-   registry and add generic observation-only scenarios for identity binding,
-   freshness, cancellation, restart, storage replacement, fault, capability
-   absence, and exact completion.
-
-The proposal does not change Public V1 replication semantics, add a built-in
-credential contract, choose transport or TLS, define Oracle-specific types,
-map SCN to LSN, or add Data Guard behavior. A custom active Replicator remains
-free to own its transport; an observation-only subject has no replication
-transport at all.
-
-## Oracle Free application
-
-Oracle Free may use this proposal only as one standalone, observe-only,
-non-electable, mutation-free, non-replicating, Data Guard-free subject. It may
-publish bounded native health and identity/lineage evidence. It may not
-publish Kuberic progress, accept replication or authority callbacks, expose a
-client service address or replication endpoint, or become Data Guard capable.
-
-The selected Public V1 API is therefore a sufficient architectural base for a
-future full custom Data Guard Replicator, but it is not the truthful hosting
-surface for Oracle Free. Data Guard implementation remains separately blocked
-by the readiness contract.
+A future Enterprise Data Guard Replicator remains a separate implementation
+subject to the complete readiness, licensing, transport, fencing, identity,
+and exact-completion gates in
+[the Data Guard readiness contract](data-guard-readiness.md).

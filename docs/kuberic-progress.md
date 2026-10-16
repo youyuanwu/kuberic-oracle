@@ -171,32 +171,34 @@ service-owned `PgReplicator`; it is not an observe-only adapter
 `28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291`;
 `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:79-89`).
 
-Oracle Free therefore still lacks a truthful hosted surface. It must not
-pretend to implement replication callbacks, mutate Oracle, or fabricate
-unsupported capabilities. The generic
-[observation-only hosting contract](observation-only-hosting-contract.md)
-proposes exactly Open, Observe, Close, and Abort with explicit capability
-absence. That proposal does not exist at the selected upstream commit.
+The repository now implements a fixed-API custom singleton Replicator around
+an injected Oracle observation source. The implementation follows the selected
+PostgreSQL factory/interface-allocation pattern while retaining Oracle-specific
+admission and the MSSQL adapter's injected-observer lifecycle structure. It
+supplies neither a `StateProvider` nor a `StateReplicator`.
 
 The
 [operation-completion matrix](data-guard-readiness.md#exact-operation-completion-matrix)
 separates Oracle-native state from repository request/attempt binding and
 defaults unattributable outcomes to ambiguous.
 
-The observation-only proposal maps Oracle standalone behavior without
-implementing Replicator-shaped placeholders:
+The custom Replicator maps the mandatory Public V1 callbacks as follows:
 
-| Proposed observation-only behavior | Oracle standalone response |
+| Public V1 behavior | Oracle standalone response |
 |---|---|
-| Open | Bind resource, replica, process-session, storage-incarnation, and configured Oracle target identities |
-| Observe | Require fresh bounded native identity, lineage, `PRIMARY`, and `READ WRITE` evidence |
-| Close | Stop new observations, resolve accepted attempts, and seal publication |
-| Abort | Seal publication, cancel in-flight work, and remain idempotently terminal |
-| Replication/election/progress/configuration/build/remove/data-loss | Capability absent; no callback exists |
-| Addresses | Publish neither a client service address nor a replication endpoint |
+| Open | Bind resource, exact replica, process session, configured target, and Kuberic Replicator address |
+| Primary role | Require a fresh admitted `PRIMARY`, `READ WRITE` Oracle Free observation |
+| Current configuration | Accept exactly one local Primary member, write quorum one, and zero remote peers |
+| Current progress | Return zero for empty adapter-owned Kuberic history after fresh admission |
+| Catch-up capability | Return `INVALID_LSN` because peer catch-up is inapplicable |
+| Close/Abort | Advance the terminal generation and reject late observation completion |
+| Secondary/catch-up/build/remove/data-loss/epoch change | Reject explicitly |
+| Addresses | Publish no Oracle client service address; the required Kuberic Replicator address is not an Oracle listener |
 
-Failure must be explicit. Zero, last-known values, endpoint reachability, or a
-healthy listener must not be returned as success-shaped substitutes.
+Progress zero is not a placeholder for missing Oracle evidence. It describes
+the adapter's actual empty Kuberic application-history domain. Oracle SCN,
+resetlogs, activation, and incarnation remain separate native evidence and are
+never converted to Kuberic progress, epoch, or history.
 
 ## Future Data Guard admission
 

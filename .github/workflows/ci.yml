@@ -29,6 +29,10 @@ jobs:
         with:
           components: rustfmt, clippy
           build-warnings: ""
+      - name: Install validation prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler strace
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run strict Clippy
@@ -37,10 +41,8 @@ jobs:
         run: |
           test "$(uname -m)" = "x86_64"
           docker info
-          if ! command -v strace >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install --yes strace
-          fi
+          protoc --version
+          strace --version
           df -h /
       - name: Run tests
         run: cargo test --locked --workspace --all-features
