@@ -330,7 +330,9 @@ async fn exercise_supported_lifecycle(
                 operation_command(session.clone(), revision, operation_id, program),
             )))
             .await
-            .map_err(|_| runtime_failure("live runtime operation failed"))?;
+            .map_err(|error| {
+                PocFailure::fixture_command(format!("live runtime {operation_id} failed: {error}"))
+            })?;
     }
     let progress = handle
         .public_v1_report()
