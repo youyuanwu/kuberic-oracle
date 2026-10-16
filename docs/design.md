@@ -543,8 +543,9 @@ Implemented in Stage 3:
   application cleanup;
 - a real server-free initialization/lifecycle/restart proof with fresh process
   sessions and stale-session rejection; and
-- a test-only worker-backed observation source that drives the same host
-  lifecycle against the owned loopback Oracle Free fixture.
+- a test-only worker-evidence observation source that drives the same host
+  lifecycle against the owned loopback Oracle Free fixture without launching
+  child workers from inside Tokio callbacks.
 
 The complete callback and identity contract is in the
 [Oracle Free custom Replicator contract](observation-only-hosting-contract.md).

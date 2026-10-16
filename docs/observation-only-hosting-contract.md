@@ -166,11 +166,13 @@ Production still has:
 - no plaintext production mode.
 
 The existing `oracledb` dependency and plaintext connection remain in the test
-crate and are restricted to the fixture-owned loopback worker. The test-only
-worker source drives the same real host lifecycle inside the existing live
-fixture, waits for worker idleness, and stops the host before fixture cleanup.
-A future production observation source requires a separately reviewed
-non-plaintext transport and deployment design.
+crate and are restricted to the fixture-owned loopback worker. The live proof
+captures fresh worker-produced evidence before host activation, supplies that
+immutable evidence through the test-only source, drives the same real host
+lifecycle, and stops the host before fixture cleanup. Later restart and
+recreation checks continue to launch fresh direct workers outside Tokio
+callbacks. A future production observation source requires a separately
+reviewed non-plaintext transport and deployment design.
 
 ## Data Guard separation
 

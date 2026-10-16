@@ -191,8 +191,8 @@ destinations, runs positive/authentication/authorization cases serially,
 brackets the current whole-database incarnation, proves instance restart and
 same-volume container recreation separately, drives a real Kuberic
 `ReplicaHost` through Open, Primary, singleton configuration, progress zero,
-and Close using the worker-backed source, waits for worker idleness, and
-removes only identity-matched owned resources.
+and Close using fresh process-isolated worker evidence, stops the host before
+fixture cleanup, and removes only identity-matched owned resources.
 
 The pinned image seeds a fresh owned volume with the same DBID and current
 incarnation evidence. The live proof therefore records changed fixture

@@ -4,8 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "kuberic")]
-use kuberic_oracle::kuberic::OracleObservationSource;
 use kuberic_oracle::{
     ConnectionContainer, ContainerDataPolicy, EditionProfile, NativeName, ObservationScope,
     ObserverTimeouts, OracleObservation, OracleSupportConfig, PinnedImage, PrincipalPlacement,
@@ -77,23 +75,25 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
     trace_result?;
     trace_cleanup?;
     #[cfg(feature = "kuberic")]
-    let source = WorkerObservationSource::new(worker, observation_request);
+    let source = WorkerObservationSource::new(
+        observation.clone(),
+        observation_request.support.clone(),
+        Duration::from_millis(
+            observation_request
+                .timeouts
+                .snapshot_millis
+                .saturating_add(observation_request.timeouts.shutdown_millis)
+                .saturating_add(5_000),
+        ),
+        observation_request.maximum_age_millis,
+    );
     if observation.product.product != "Oracle AI Database 26ai Free"
         || observation.product.native_major_version != 23
     {
         return Err(live_failure("live product evidence was unexpected"));
     }
     let initial_resources = fixture.resource_evidence()?;
-    let repeated = {
-        #[cfg(feature = "kuberic")]
-        {
-            observe_with_source(&source)?
-        }
-        #[cfg(not(feature = "kuberic"))]
-        {
-            observe(fixture, operation_deadline)?
-        }
-    };
+    let repeated = observe(fixture, operation_deadline)?;
     require_stable_identity(&observation, &repeated)?;
     #[cfg(feature = "kuberic")]
     exercise_runtime_host(&source)?;
@@ -154,31 +154,13 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
 
     let restarted_resources = fixture.restart_container(operation_deadline)?;
     require_same_resources(&initial_resources, &restarted_resources, true)?;
-    let restarted = {
-        #[cfg(feature = "kuberic")]
-        {
-            observe_with_source(&source)?
-        }
-        #[cfg(not(feature = "kuberic"))]
-        {
-            observe(fixture, operation_deadline)?
-        }
-    };
+    let restarted = observe(fixture, operation_deadline)?;
     require_stable_identity(&observation, &restarted)?;
     require_restart_changed(&repeated, &restarted)?;
 
     let recreated_resources = fixture.recreate_container_same_volume(operation_deadline)?;
     require_same_resources(&restarted_resources, &recreated_resources, false)?;
-    let recreated = {
-        #[cfg(feature = "kuberic")]
-        {
-            observe_with_source(&source)?
-        }
-        #[cfg(not(feature = "kuberic"))]
-        {
-            observe(fixture, operation_deadline)?
-        }
-    };
+    let recreated = observe(fixture, operation_deadline)?;
     require_stable_identity(&observation, &recreated)?;
     require_restart_changed(&restarted, &recreated)?;
 
@@ -207,36 +189,11 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
             "pinned Oracle Free fresh-volume identity behavior changed",
         ));
     }
-    let fresh = {
-        #[cfg(feature = "kuberic")]
-        {
-            observe_with_source(&source)?
-        }
-        #[cfg(not(feature = "kuberic"))]
-        {
-            observe(fixture, operation_deadline)?
-        }
-    };
+    let fresh = observe(fixture, operation_deadline)?;
     require_stable_identity(&observation, &fresh)?;
     require_restart_changed(&recreated, &fresh)?;
 
     Ok(())
-}
-
-#[cfg(feature = "kuberic")]
-fn observe_with_source(source: &WorkerObservationSource) -> Result<OracleObservation, PocFailure> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .build()
-        .map_err(|_| live_failure("worker source runtime could not be created"))?
-        .block_on(async {
-            let result = source
-                .observe()
-                .await
-                .map_err(|_| live_failure("worker-backed observation failed"));
-            source.wait_for_idle().await;
-            result
-        })
 }
 
 #[cfg(feature = "kuberic")]
@@ -250,7 +207,6 @@ fn exercise_runtime_host(source: &WorkerObservationSource) -> Result<(), PocFail
         .block_on(source.exercise_runtime_host(temporary.path()))
 }
 
-#[cfg(not(feature = "kuberic"))]
 fn observe(
     fixture: &OracleFixture,
     operation_deadline: Instant,

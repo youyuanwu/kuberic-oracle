@@ -205,8 +205,9 @@ Its report carries Primary progress `[0, 0]`, no application service location,
 the exact process session, and Kuberic's Pod/PVC-backed storage incarnation.
 Restart from the same metadata and durable Oracle application binding produces
 a fresh process session; a command fenced to the old session is rejected.
-The live fixture repeats the supported lifecycle with the process-isolated
-loopback Oracle worker and stops the host before fixture cleanup.
+The live fixture repeats the supported lifecycle with fresh evidence produced
+by the process-isolated loopback Oracle worker and stops the host before
+fixture cleanup.
 
 ## Future Data Guard admission
 

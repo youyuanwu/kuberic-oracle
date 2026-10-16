@@ -1,21 +1,17 @@
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::DirBuilderExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use kuberic_oracle::kuberic::{
-    ObservationFailureKind, ObservationSourceError, OracleObservationSource, OracleServiceConfig,
-    SystemObservationClock,
+    ObservationSourceError, OracleObservationSource, OracleServiceConfig, SystemObservationClock,
 };
 use kuberic_oracle::runtime_host::{
     OracleRuntimeHostConfig, OracleRuntimeHostInput, prepare_runtime_host,
 };
-use kuberic_oracle::{
-    DatabaseId, DatabaseIncarnationIdentity, DecimalScn, NativeName, ObservationTarget,
-    OracleObservation,
-};
+use kuberic_oracle::{ObservationTarget, OracleObservation};
 use kuberic_runtime::protocol::command::{ProtocolCommand, PublicV1OperationCommand};
 use kuberic_runtime::protocol::public_operations::{
     PublicConfiguration, PublicOperationClass, PublicOperationIntent, PublicOperationProgram,
@@ -23,18 +19,16 @@ use kuberic_runtime::protocol::public_operations::{
 };
 use kuberic_runtime::protocol::types::{
     ConfigurationDescriptor, ConfigurationMember, EffectivePolicy, Epoch, OperationId, PodUid,
-    ProcessSessionId, PvcUid, ReplicaId, ReplicaIdentity, ReplicaInstanceId, ReplicaRole,
-    ResourceUid, derive_agent_generation, derive_initialization_id,
+    ProcessSessionId, PublicProtocolGeneration, PvcUid, ReplicaId, ReplicaIdentity,
+    ReplicaInstanceId, ReplicaRole, ReplicaStorageIdentity, ReplicaStorageIncarnationContext,
+    ResourceUid, StorageGeneration, derive_agent_generation, derive_bootstrap_history,
+    derive_history_initialization_id, derive_initialization_id,
 };
 use kuberic_runtime::testing::sqlite_store::SqliteStore;
 use kuberic_runtime::testing::state::{SCHEMA_VERSION, StorageIdentity};
-use tokio::sync::Semaphore;
 
-use super::{
-    Cancellation, PocCategory, PocFailure, WorkerRequest, protocol::ObservationRequest, run_worker,
-};
+use super::{PocCategory, PocFailure};
 
-const MAX_CONCURRENT_WORKERS: usize = 1;
 const RUNTIME_RESOURCE_UID: &str = "oracle-live-runtime";
 const RUNTIME_POD_UID: &str = "oracle-live-runtime-pod";
 const RUNTIME_PVC_UID: &str = "oracle-live-runtime-pvc";
@@ -44,28 +38,25 @@ const RUNTIME_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct WorkerObservationSource {
-    worker_path: PathBuf,
-    request: ObservationRequest,
-    worker_slots: Arc<Semaphore>,
+    observation: OracleObservation,
+    support: kuberic_oracle::OracleSupportConfig,
+    observation_timeout: Duration,
+    maximum_age_millis: u64,
 }
 
 impl WorkerObservationSource {
-    pub fn new(worker_path: &Path, request: ObservationRequest) -> Self {
+    pub fn new(
+        observation: OracleObservation,
+        support: kuberic_oracle::OracleSupportConfig,
+        observation_timeout: Duration,
+        maximum_age_millis: u64,
+    ) -> Self {
         Self {
-            worker_path: worker_path.to_path_buf(),
-            request,
-            worker_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_WORKERS)),
+            observation,
+            support,
+            observation_timeout,
+            maximum_age_millis,
         }
-    }
-
-    pub async fn wait_for_idle(&self) {
-        let permits = self
-            .worker_slots
-            .clone()
-            .acquire_many_owned(MAX_CONCURRENT_WORKERS as u32)
-            .await
-            .expect("worker semaphore remains open");
-        drop(permits);
     }
 
     pub async fn exercise_runtime_host(&self, root: &Path) -> Result<(), PocFailure> {
@@ -91,33 +82,16 @@ impl WorkerObservationSource {
         let replication_address = free_address()?;
         let replication_endpoint = format!("http://{replication_address}");
         let target = ObservationTarget {
-            database_id: DatabaseId::new(self.request.target_database_id)
-                .map_err(|_| runtime_failure("live runtime target DBID is invalid"))?,
-            database_unique_name: NativeName::new(
-                "target database unique name",
-                self.request.target_database_unique_name.clone(),
-            )
-            .map_err(|_| runtime_failure("live runtime target unique name is invalid"))?,
-            incarnation: DatabaseIncarnationIdentity {
-                incarnation_number: self.request.target_incarnation_number,
-                resetlogs_id: self.request.target_resetlogs_id,
-                resetlogs_change: DecimalScn::parse(&self.request.target_resetlogs_change)
-                    .map_err(|_| runtime_failure("live runtime resetlogs change is invalid"))?,
-            },
+            database_id: self.observation.database.database_id,
+            database_unique_name: self.observation.database.database_unique_name.clone(),
+            incarnation: self.observation.incarnation.identity,
         };
-        let observation_timeout = Duration::from_millis(
-            self.request
-                .timeouts
-                .snapshot_millis
-                .saturating_add(self.request.timeouts.shutdown_millis)
-                .saturating_add(5_000),
-        );
         let service = OracleServiceConfig::new(
             ResourceUid::new(RUNTIME_RESOURCE_UID),
-            self.request.support.clone(),
+            self.support.clone(),
             target,
-            observation_timeout,
-            self.request.maximum_age_millis,
+            self.observation_timeout,
+            self.maximum_age_millis,
             replication_endpoint.clone(),
         )
         .map_err(|_| runtime_failure("live runtime service configuration is invalid"))?;
@@ -152,36 +126,61 @@ impl WorkerObservationSource {
             &PodUid::new(RUNTIME_POD_UID),
             &PvcUid::new(RUNTIME_PVC_UID),
         );
-        drop(
-            SqliteStore::create_public_v1_with_application_paths(
-                SqliteStore::metadata_database_path(config.data_root()),
-                PublicV1Identity::new(1),
-                StorageIdentity {
-                    schema_version: SCHEMA_VERSION,
-                    resource_uid: ResourceUid::new(RUNTIME_RESOURCE_UID),
-                    pod_uid: PodUid::new(RUNTIME_POD_UID),
-                    pvc_uid: PvcUid::new(RUNTIME_PVC_UID),
-                    initialization_id,
-                    local_identity: identity,
-                    effective_policy: EffectivePolicy::fixed(1, 30).ok_or_else(|| {
-                        runtime_failure("live runtime effective policy is invalid")
-                    })?,
-                },
-                config.application_storage_paths(),
-            )
-            .map_err(|_| runtime_failure("live runtime metadata initialization failed"))?,
+        let store = SqliteStore::create_public_v1_with_application_paths(
+            SqliteStore::metadata_database_path(config.data_root()),
+            PublicV1Identity::new(1),
+            StorageIdentity {
+                schema_version: SCHEMA_VERSION,
+                resource_uid: ResourceUid::new(RUNTIME_RESOURCE_UID),
+                pod_uid: PodUid::new(RUNTIME_POD_UID),
+                pvc_uid: PvcUid::new(RUNTIME_PVC_UID),
+                initialization_id,
+                local_identity: identity,
+                effective_policy: EffectivePolicy::fixed(1, 30)
+                    .ok_or_else(|| runtime_failure("live runtime effective policy is invalid"))?,
+            },
+            config.application_storage_paths(),
+        )
+        .map_err(|_| runtime_failure("live runtime metadata initialization failed"))?;
+        let generation = PublicProtocolGeneration::new(1);
+        let history_initialization =
+            derive_history_initialization_id(&ResourceUid::new(RUNTIME_RESOURCE_UID), generation);
+        let history = derive_bootstrap_history(
+            &ResourceUid::new(RUNTIME_RESOURCE_UID),
+            generation,
+            &history_initialization,
         );
+        store
+            .initialize_public_v1_history(
+                &history_initialization,
+                &history,
+                &ReplicaStorageIncarnationContext {
+                    replica: runtime_identity(),
+                    storage: ReplicaStorageIdentity::Persistent {
+                        pod_uid: PodUid::new(RUNTIME_POD_UID),
+                        pvc_uid: PvcUid::new(RUNTIME_PVC_UID),
+                    },
+                    storage_generation: StorageGeneration::new(
+                        "oracle-live-runtime-storage-generation",
+                    ),
+                },
+            )
+            .await
+            .map_err(|error| {
+                PocFailure::fixture_command(format!(
+                    "live runtime history initialization failed: {error}"
+                ))
+            })?;
+        drop(store);
         let (startup_shutdown, receiver) = tokio::sync::watch::channel(false);
         let mut startup = tokio::spawn(host.start_with_shutdown(receiver));
         let mut running = match tokio::time::timeout(RUNTIME_DEADLINE, &mut startup).await {
             Ok(Ok(Ok(Some(running)))) => running,
             Ok(Ok(Ok(None))) | Ok(Ok(Err(_))) | Ok(Err(_)) => {
-                self.wait_for_idle().await;
                 return Err(runtime_failure("live runtime startup failed"));
             }
             Err(_) => {
                 let _ = cancel_startup(&startup_shutdown, &mut startup).await;
-                self.wait_for_idle().await;
                 return Err(runtime_failure("live runtime startup failed"));
             }
         };
@@ -204,7 +203,6 @@ impl WorkerObservationSource {
             .await
             .map_err(|_| runtime_failure("live runtime shutdown timed out"))?
             .map_err(|_| runtime_failure("live runtime shutdown failed"));
-        self.wait_for_idle().await;
         result.and(close).and(shutdown)
     }
 }
@@ -212,47 +210,8 @@ impl WorkerObservationSource {
 #[async_trait]
 impl OracleObservationSource for WorkerObservationSource {
     async fn observe(&self) -> Result<OracleObservation, ObservationSourceError> {
-        let permit = self
-            .worker_slots
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| ObservationSourceError::new(ObservationFailureKind::Cancelled))?;
-        let worker_path = self.worker_path.clone();
-        let request = self.request.clone();
-        let timeouts = request.timeouts;
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            run_worker(
-                &worker_path,
-                WorkerRequest::Observe(Box::new(request)),
-                timeouts,
-                &Cancellation::default(),
-            )
-        })
-        .await
-        .map_err(|_| ObservationSourceError::new(ObservationFailureKind::Response))?
-        .map_err(map_failure)
+        Ok(self.observation.clone())
     }
-}
-
-fn map_failure(failure: PocFailure) -> ObservationSourceError {
-    let kind = match failure.category() {
-        PocCategory::Cancelled => ObservationFailureKind::Cancelled,
-        PocCategory::Timeout => ObservationFailureKind::Deadline,
-        PocCategory::Authentication | PocCategory::Transport => ObservationFailureKind::Connection,
-        PocCategory::Authorization => ObservationFailureKind::Query,
-        PocCategory::Configuration
-        | PocCategory::Capability
-        | PocCategory::Protocol
-        | PocCategory::RowCount
-        | PocCategory::NativeValue
-        | PocCategory::IdentityChanged
-        | PocCategory::Shutdown
-        | PocCategory::Fixture
-        | PocCategory::Cleanup => ObservationFailureKind::Response,
-    };
-    ObservationSourceError::new(kind)
 }
 
 async fn cancel_startup(
@@ -414,39 +373,4 @@ fn free_address() -> Result<SocketAddr, PocFailure> {
 
 fn runtime_failure(message: &'static str) -> PocFailure {
     PocFailure::new(super::PocStage::Fixture, PocCategory::Protocol, message)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::poc::PocStage;
-
-    #[test]
-    fn maps_sanitized_worker_categories_to_coarse_public_failures() {
-        for (category, expected) in [
-            (PocCategory::Cancelled, ObservationFailureKind::Cancelled),
-            (PocCategory::Timeout, ObservationFailureKind::Deadline),
-            (
-                PocCategory::Authentication,
-                ObservationFailureKind::Connection,
-            ),
-            (PocCategory::Transport, ObservationFailureKind::Connection),
-            (PocCategory::Authorization, ObservationFailureKind::Query),
-            (PocCategory::Configuration, ObservationFailureKind::Response),
-            (PocCategory::Capability, ObservationFailureKind::Response),
-            (PocCategory::Protocol, ObservationFailureKind::Response),
-            (PocCategory::RowCount, ObservationFailureKind::Response),
-            (PocCategory::NativeValue, ObservationFailureKind::Response),
-            (
-                PocCategory::IdentityChanged,
-                ObservationFailureKind::Response,
-            ),
-            (PocCategory::Shutdown, ObservationFailureKind::Response),
-            (PocCategory::Fixture, ObservationFailureKind::Response),
-            (PocCategory::Cleanup, ObservationFailureKind::Response),
-        ] {
-            let failure = PocFailure::new(PocStage::Fixture, category, "private detail");
-            assert_eq!(map_failure(failure).kind, expected);
-        }
-    }
 }

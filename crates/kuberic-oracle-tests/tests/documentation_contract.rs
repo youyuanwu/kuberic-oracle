@@ -172,7 +172,7 @@ fn custom_singleton_contract_is_bounded_and_has_no_oracle_replication_claims() {
         "versioned durable application binding",
         "initializes a real agent",
         "observes a new process session",
-        "waits for worker idleness",
+        "fresh worker-produced evidence",
         "does not make Oracle Free electable, replicated, or Data Guard capable",
     ] {
         assert!(contract.contains(required), "{required}");
