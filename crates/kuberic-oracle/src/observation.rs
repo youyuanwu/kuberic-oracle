@@ -4,8 +4,10 @@ use crate::{
     EditionProfile, ForceLogging, LogMode, NativeEdition, NativeName, OpenMode, OracleObservation,
     OracleSupportConfig, ReplicationProfile,
 };
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservationTarget {
     pub database_id: DatabaseId,
     pub database_unique_name: NativeName,

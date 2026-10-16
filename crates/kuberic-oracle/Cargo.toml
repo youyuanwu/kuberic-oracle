@@ -10,11 +10,22 @@ publish.workspace = true
 
 [features]
 default = []
-kuberic = ["dep:async-trait", "dep:kuberic-runtime", "dep:tokio"]
+kuberic = [
+    "dep:async-trait",
+    "dep:kuberic-runtime",
+    "dep:libc",
+    "dep:serde_json",
+    "dep:tokio",
+]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
 kuberic-runtime = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

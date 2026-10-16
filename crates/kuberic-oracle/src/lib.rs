@@ -5,6 +5,8 @@ pub mod kuberic;
 pub mod observation;
 pub mod parser;
 pub mod query;
+#[cfg(feature = "kuberic")]
+pub mod runtime_host;
 pub mod types;
 
 pub use config::{

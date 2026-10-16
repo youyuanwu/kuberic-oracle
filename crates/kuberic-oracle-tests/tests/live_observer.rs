@@ -9,6 +9,8 @@ use kuberic_oracle::{
     ObserverTimeouts, OracleObservation, OracleSupportConfig, PinnedImage, PrincipalPlacement,
     ReplicationProfile,
 };
+#[cfg(feature = "kuberic")]
+use kuberic_oracle_tests::poc::WorkerObservationSource;
 use kuberic_oracle_tests::{
     fixture::{FixtureConfig, FixtureResourceEvidence, OracleFixture},
     poc::{
@@ -72,6 +74,19 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
     let observation = observation_result?;
     trace_result?;
     trace_cleanup?;
+    #[cfg(feature = "kuberic")]
+    let source = WorkerObservationSource::new(
+        observation.clone(),
+        observation_request.support.clone(),
+        Duration::from_millis(
+            observation_request
+                .timeouts
+                .snapshot_millis
+                .saturating_add(observation_request.timeouts.shutdown_millis)
+                .saturating_add(5_000),
+        ),
+        observation_request.maximum_age_millis,
+    );
     if observation.product.product != "Oracle AI Database 26ai Free"
         || observation.product.native_major_version != 23
     {
@@ -80,6 +95,8 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
     let initial_resources = fixture.resource_evidence()?;
     let repeated = observe(fixture, operation_deadline)?;
     require_stable_identity(&observation, &repeated)?;
+    #[cfg(feature = "kuberic")]
+    exercise_runtime_host(&source)?;
     if observation.instance.startup_time != repeated.instance.startup_time {
         return Err(live_failure(
             "observer replacement changed instance restart evidence",
@@ -177,6 +194,17 @@ fn run_cases(fixture: &mut OracleFixture, operation_deadline: Instant) -> Result
     require_restart_changed(&recreated, &fresh)?;
 
     Ok(())
+}
+
+#[cfg(feature = "kuberic")]
+fn exercise_runtime_host(source: &WorkerObservationSource) -> Result<(), PocFailure> {
+    let temporary =
+        tempfile::tempdir().map_err(|_| live_failure("runtime host root could not be created"))?;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| live_failure("runtime host executor could not be created"))?
+        .block_on(source.exercise_runtime_host(temporary.path()))
 }
 
 fn observe(

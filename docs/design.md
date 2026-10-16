@@ -1,9 +1,9 @@
 # Oracle External-Replication Adapter
 
-> **Status:** Safety contract, server-free observation admission, and
-> test-only Oracle Free live proof. Production database connectivity, Kuberic
-> runtime hosting, Data Guard mutation, and failover effects are not
-> implemented.
+> **Status:** Safety contract, server-free observation admission, optional
+> Kuberic runtime-host library, and test-only Oracle Free live host proof.
+> Production database connectivity, runtime executable/deployment, Data Guard
+> mutation, and failover effects are not implemented.
 >
 > **Support level:** Experimental. This is not an Oracle-supported Kubernetes
 > high-availability solution or a production deployment guide.
@@ -529,8 +529,23 @@ Implemented in Stage 3:
 - `INVALID_LSN` for inapplicable peer catch-up capability;
 - explicit rejection of secondary, catch-up, build, remove, data-loss, and
   epoch-changing authority paths;
-- no Oracle client service address; and
-- Close/Abort generation fencing that prevents late callback success.
+- no Oracle client service address;
+- Close/Abort generation fencing that prevents late callback success;
+- validated runtime process identity, roots, endpoints, token, deadlines, and
+  transport bounds;
+- a durable application binding for resource, logical replica, Oracle support
+  profile/image, exact target DBID/`DB_UNIQUE_NAME`/incarnation, and canonical
+  application root;
+- Kuberic named application-path binding plus exact local endpoint resolution;
+- an `OracleService` wrapper that initializes or validates the binding before
+  Open;
+- reusable bounded `ReplicaHost` startup, cancellation, shutdown, wait, and
+  application cleanup;
+- a real server-free initialization/lifecycle/restart proof with fresh process
+  sessions and stale-session rejection; and
+- a test-only worker-evidence observation source that drives the same host
+  lifecycle against the owned loopback Oracle Free fixture without launching
+  child workers from inside Tokio callbacks.
 
 The complete callback and identity contract is in the
 [Oracle Free custom Replicator contract](observation-only-hosting-contract.md).
@@ -539,8 +554,9 @@ Still deferred:
 
 - a production runtime executable and deployment configuration;
 - a non-plaintext production Oracle observation source;
-- binding external deployment/storage evidence into adapter-owned
-  observation records;
+- binding external Oracle deployment/storage evidence into adapter-owned
+  observation records beyond Kuberic's Pod/PVC/storage-incarnation and named
+  application-path domains;
 - registration in Kuberic's hard-coded generic conformance subjects; and
 - any Oracle mutation, replication, election, routing, or Data Guard behavior.
 

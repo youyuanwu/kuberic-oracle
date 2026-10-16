@@ -10,15 +10,25 @@ publish.workspace = true
 
 [features]
 default = []
-kuberic = ["kuberic-oracle/kuberic"]
+kuberic = [
+    "dep:async-trait",
+    "dep:kuberic-runtime",
+    "dep:tokio",
+    "dep:tonic",
+    "kuberic-oracle/kuberic",
+]
 
 [dependencies]
+async-trait = { workspace = true, optional = true }
 kuberic-oracle.workspace = true
+kuberic-runtime = { workspace = true, features = ["testing"], optional = true }
 libc.workspace = true
 oracledb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
 zeroize.workspace = true
 
 [dev-dependencies]
