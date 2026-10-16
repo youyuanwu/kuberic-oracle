@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+kuberic = ["kuberic-oracle/kuberic"]
+
 [dependencies]
 kuberic-oracle.workspace = true
 libc.workspace = true

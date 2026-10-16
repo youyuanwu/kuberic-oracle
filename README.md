@@ -21,14 +21,20 @@ test-only live proof:
   exact supported logging values;
 - fail-closed observation admission for identity, freshness, edition, version,
   and the currently modeled role, logging, and open-mode subset; and
+- an optional Public V1 custom singleton Replicator with an injected
+  observation source, empty adapter-owned history, exact singleton
+  configuration admission, and explicit rejection of secondary, catch-up,
+  build, removal, data-loss, and authority-changing paths; and
 - a pure-Rust, process-isolated Oracle Free live test with exact image,
   least-privilege, row-count, restart, same-volume recreation, fresh-volume
   clone-ambiguity, failure, recovery, and cleanup checks.
 
 Production code still does **not** connect to Oracle, read credentials, launch
-containers, publish Kuberic progress, configure Data Guard, or perform role
-changes. The live driver and plaintext connection exist only in the tests
-crate; plaintext is not a supported production mode.
+containers, publish Oracle-native progress as Kuberic progress, configure Data
+Guard, or perform Oracle role changes. The optional Kuberic adapter publishes
+only progress zero for its empty adapter-owned history and returns no Oracle
+client service address. The live driver and plaintext connection exist only in
+the tests crate; plaintext is not a supported production mode.
 
 See the [support and safety design](docs/design.md) and
 [Kuberic progress analysis](docs/kuberic-progress.md). The
@@ -36,9 +42,8 @@ See the [support and safety design](docs/design.md) and
 Enterprise lab evidence matrix, selected Public V1 fit analysis, and explicit
 implementation stop conditions. The
 [observation-only hosting contract](docs/observation-only-hosting-contract.md#selected-upstream-facts)
-centralizes facts from the selected upstream baseline; its later proposal
-section defines the generic hosting boundary that Kuberic does not yet
-provide.
+centralizes facts from the selected upstream baseline and defines the
+implemented fixed-API custom singleton Replicator boundary.
 
 The selected upstream baseline is Kuberic commit
 `28b181bb1846d057cce5913513a46ed72de4c977`: Public V1 protocol `11`
@@ -98,7 +103,7 @@ security patches. See the
 
 | Profile | Repository edition profile / artifact | Replicas | Replication | Current status |
 |---|---|---:|---|---|
-| `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + test-only live proof |
+| `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + optional custom singleton Replicator + test-only live proof |
 | `standalone` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 1 | None | Contract implemented |
 | `data_guard_physical` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 3 | Oracle Data Guard | Contract only |
 
@@ -115,7 +120,8 @@ accept license terms on behalf of an operator.
 ## Workspace layout
 
 - `crates/kuberic-oracle` contains production-safe configuration, raw-row
-  parsing, snapshot contracts, and observation admission.
+  parsing, snapshot contracts, observation admission, and the optional
+  injected-source Kuberic custom Replicator.
 - `crates/kuberic-oracle-tests` contains cross-crate tests, the pure-Rust PoC
   worker, and the explicitly authorized live container fixture.
 - `docs/design.md` defines deployment ownership, support boundaries, staged
@@ -123,8 +129,8 @@ accept license terms on behalf of an operator.
 - `docs/kuberic-progress.md` explains why Oracle SCNs are retained as native
   evidence but are not yet exposed as Kuberic promotion progress.
 - `docs/observation-only-hosting-contract.md` pins the selected Public V1
-  baseline and proposes a generic Open/Observe/Close/Abort hosting boundary
-  with explicit replication-capability absence.
+  baseline and defines the implemented singleton callback, identity,
+  freshness, progress, and unsupported-capability boundary.
 
 Dependency versions are declared in the root `Cargo.toml`.
 
@@ -198,8 +204,9 @@ The initial profile does not provide:
 - automatic failover, switchover, promotion, or broker mutation;
 - election, role/configuration mutation, catch-up, build/copy, data-loss, or
   client-service routing behavior;
-- a fake Replicator, fabricated progress, or success-shaped placeholders for
-  absent capabilities;
+- Oracle-native replication through the custom Replicator, SCN-to-LSN
+  conversion, fabricated peer progress, or success-shaped unsupported
+  authority callbacks;
 - RAC, sharding, GoldenGate, or application-level logical replication;
 - Kubernetes manifests or an Oracle operator;
 - a production deployment guide; or

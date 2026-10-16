@@ -1,5 +1,7 @@
 pub mod config;
 pub mod error;
+#[cfg(feature = "kuberic")]
+pub mod kuberic;
 pub mod observation;
 pub mod parser;
 pub mod query;

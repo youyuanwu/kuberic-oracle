@@ -503,30 +503,46 @@ selectors are removed
 The complete citations are centralized in the
 [selected upstream evidence table](observation-only-hosting-contract.md#selected-upstream-facts).
 
-Selection resolves the old Phase 5 baseline blocker, but it does not create an
-observation-only host. `StatefulServiceReplica::open` still returns a
-`Replicator`, whose public semantics include role, epoch, progress,
-configuration, build/remove, data-loss, and exact completion
+`StatefulServiceReplica::open` returns a `Replicator`, whose public semantics
+include role, epoch, progress, configuration, build/remove, data-loss, and
+exact completion
 (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`;
 `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:13-30`;
 `28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:44-67`).
 Oracle DBID/incarnation/resetlogs/startup/SCN evidence is not itself Kuberic
 `HistoryContext`, replica incarnation, `ReplicatorCapabilities`, or progress,
-and those callbacks cannot be observational no-ops.
+so the implemented adapter separates an empty Kuberic application-history
+domain from Oracle-native evidence.
 
-Stage 3 therefore remains unimplemented pending the proposed generic
-[observation-only hosting contract](observation-only-hosting-contract.md).
-That proposal is not an upstream API and must not be satisfied with a fake
-Replicator.
+Implemented in Stage 3:
 
-- host one already provisioned Oracle member through Kuberic's public process
-  boundary;
-- bind expected DBID, unique name, artifact, replica, Pod, PVC, and process
-  session;
-- validate requested role against fresh Oracle evidence;
-- expose no client service address until routing is separately designed; and
-- publish no generic progress, replication endpoint, or success-shaped absent
-  capability.
+- an optional exact-revision Kuberic dependency and `kuberic` feature;
+- `OracleObservationSource` and clock injection without a production Oracle
+  driver;
+- a service-owned custom singleton `PrimaryReplicator` with neither
+  `StateProvider` nor `StateReplicator`;
+- exact resource, replica, process-session, and singleton-configuration
+  binding;
+- fresh Oracle admission for Primary role, epoch, progress, catch-up
+  capability, and configuration callbacks;
+- progress zero as the adapter's empty Kuberic history, never Oracle SCN;
+- `INVALID_LSN` for inapplicable peer catch-up capability;
+- explicit rejection of secondary, catch-up, build, remove, data-loss, and
+  epoch-changing authority paths;
+- no Oracle client service address; and
+- Close/Abort generation fencing that prevents late callback success.
+
+The complete callback and identity contract is in the
+[Oracle Free custom Replicator contract](observation-only-hosting-contract.md).
+
+Still deferred:
+
+- a production runtime executable and deployment configuration;
+- a non-plaintext production Oracle observation source;
+- binding external deployment/storage evidence into adapter-owned
+  observation records;
+- registration in Kuberic's hard-coded generic conformance subjects; and
+- any Oracle mutation, replication, election, routing, or Data Guard behavior.
 
 ### Stage 4: Enterprise Data Guard research and fixture
 

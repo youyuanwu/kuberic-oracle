@@ -1,8 +1,9 @@
 # Oracle Data Guard Readiness Contract
 
 > **Status:** Research and design contract only. No Data Guard fixture,
-> production Oracle connection, Kuberic runtime adapter, role mutation, or
-> authority-changing operation is implemented.
+> production Oracle connection, Data Guard runtime adapter, role mutation, or
+> authority-changing operation is implemented. The separate Oracle Free
+> singleton custom Replicator remains observation-only and mutation-free.
 >
 > **Oracle Free boundary:** Oracle AI Database Free remains one standalone,
 > observe-only, non-electable, mutation-free database. It is not a Data Guard
@@ -36,8 +37,8 @@ agent schema `12` are the selected production contract
 (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
 `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`).
 The [observation-only hosting contract](observation-only-hosting-contract.md#selected-upstream-facts)
-preserves the complete evidence table and separately labels the repository
-proposal.
+preserves the complete evidence table and defines the implemented Oracle Free
+custom singleton boundary.
 
 ## Current repository boundary
 
@@ -345,21 +346,20 @@ other operation-specific postconditions
 | Replica/process/storage | `ReplicaIdentity`, `ProcessSessionEndpoint`, and `ReplicaStorageIncarnationContext` are selected identities (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | Strong fit for independent member, process, and storage binding. | Oracle database, instance, observer, deployment, and storage identities must remain separate and mapping requires implementation evidence. |
 | Progress | `INVALID_LSN`, `PublicProgress`, and role/progress operations are selected (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:184-343`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:992-1055`) | A full custom Data Guard Replicator could implement these only after native mapping is proven. | Oracle evidence is multidimensional; no SCN-to-LSN or placeholder progress is allowed. |
 | Replay/exact completion | Public operations carry replay disposition, data-loss authorization, typed results, and exact completion (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2154-2195`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2200-2247`) | Strong architectural fit for request/attempt-bound outcomes. | Oracle-native state cannot prove causality without a durable operation journal, fencing, and native postcondition evidence. |
-| Custom Replicator | PostgreSQL supplies neither `StateProvider` nor `StateReplicator`, but returns an active service-owned custom Replicator (`28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291`) | Confirms that an external engine may own replication/copy behavior. | PostgreSQL is not an observation-only precedent and does not justify fake callbacks for Oracle Free. |
-| Hosting | The current host requires a returned `Replicator` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`) | Fits a future active Data Guard Replicator after every independent gate closes. | A separate generic observation-only host remains proposed, not selected upstream behavior. |
-| Conformance | Subjects are hard-coded as `postgresql` and `built-in-replacement` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:915-1002`) | Existing selected subjects can be reviewed. | A third custom observation-only subject needs a registrable conformance path. |
+| Custom Replicator | PostgreSQL supplies neither `StateProvider` nor `StateReplicator`, but returns an active service-owned custom Replicator (`28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291`) | Confirms that an external engine may own its Public V1 callback implementation. | Oracle Free uses a separate singleton empty-history implementation; that does not establish Data Guard callbacks. |
+| Hosting | The current host requires a returned `Replicator` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`) | The implemented Oracle Free custom Replicator proves fixed-API singleton hosting. A future Data Guard adapter still requires active replication semantics after every independent gate closes. | The Free adapter's rejected callbacks and empty history cannot be reused as Data Guard authority. |
+| Conformance | Subjects are hard-coded as `postgresql` and `built-in-replacement` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:915-1002`) | Repository-owned Oracle contract tests can validate its bounded subject. | Oracle is not registered in the upstream generic conformance selector. |
 
 ### Oracle Free hosting decision
 
-**Repository design choice:** Oracle Free requires a separate
-observation-only hosting boundary. It must not pretend to implement
-replication callbacks, secondary progress, catch-up, build/copy, data-loss,
-switchover, failover, or election. The benefit is truthful capability and
-authority separation. The generic
-[Open/Observe/Close/Abort proposal](observation-only-hosting-contract.md#proposed-generic-hosting-boundary)
-defines explicit capability absence, no client service address, and no
-replication endpoint. It is a repository proposal, not an upstream feature, so
-Oracle Free runtime integration remains stopped without a fake Replicator.
+**Repository design choice:** Oracle Free is hosted through the implemented
+[custom singleton Replicator](observation-only-hosting-contract.md). The
+Replicator owns only Kuberic lifecycle, exact singleton configuration, and an
+empty adapter-history position. Fresh Oracle admission gates supported
+callbacks. Secondary, catch-up, build/copy, data-loss, switchover, failover,
+election, and epoch-changing authority remain explicit errors. No Oracle
+client service address is published, and the required Kuberic Replicator
+address is not an Oracle or Data Guard endpoint.
 
 ## Stop conditions
 
@@ -393,11 +393,11 @@ is unresolved:
     authorization/fencing principals; deny rules; credential handling; and
     authenticated encrypted channels with peer-name verification are not
     separately designed.
-12. **Observation-only hosting:** the selected Public V1 objects are durably
-    reviewable and sufficient as the base for a future full custom Replicator,
-    but a generic observation-only Open/Observe/Close/Abort boundary and a
-    registrable third conformance subject do not exist upstream. Oracle Free
-    must remain unhosted rather than use fake Replicator/progress semantics.
+12. **Runtime activation:** the Oracle Free custom singleton Replicator is
+    implemented server-free, but no production runtime executable,
+    non-plaintext Oracle observation source, deployment/storage evidence
+    binding, or upstream Oracle conformance subject exists. None may be
+    inferred from the adapter unit and repository contract tests.
 13. **Oracle Free:** any design would make Free electable, mutable,
     replicated, or Data Guard capable.
 

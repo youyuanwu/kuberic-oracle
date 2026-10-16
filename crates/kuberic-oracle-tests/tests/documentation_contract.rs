@@ -146,59 +146,41 @@ fn stale_preview_baselines_cannot_return() {
 }
 
 #[test]
-fn observation_only_contract_is_bounded_and_has_no_replication_placeholders() {
+fn custom_singleton_contract_is_bounded_and_has_no_oracle_replication_claims() {
     let contract = normalize_whitespace(&read("docs/observation-only-hosting-contract.md"));
     for required in [
-        "proposal only",
-        "exactly four operations",
-        "**Open**",
-        "**Observe**",
-        "**Close**",
-        "**Abort**",
-        "resource identity",
-        "logical replica identity",
-        "process-session identity",
-        "storage-incarnation identity",
-        "absolute completion deadline",
-        "maximum acceptable evidence age",
-        "started, observed, and completed timestamps",
-        "explicit engine health and evidence health",
-        "deadline_met",
-        "maximum_age_met",
-        "cannot reuse cached success",
-        "one exact disposition: `succeeded`, `failed`, `cancelled`, or `ambiguous`",
-        "Repeated Abort calls are idempotent",
-        "Cancellation:",
-        "Process restart:",
-        "Stale session:",
-        "Storage replacement:",
-        "Fault:",
-        "Close race:",
-        "Abort race:",
-        "client service address",
-        "replication endpoint",
-        "Add a separate generic observation-only hosted interface",
-        "Add an immutable hosting-capability variant",
-        "Make conformance subjects registrable",
-        "The proposal does not change Public V1 replication semantics, add a built-in credential contract, choose transport or TLS",
-        "same boundary must be usable by any external",
-        "No Oracle Free adapter may implement a fake `Replicator`",
+        "Implemented as the optional `kuberic` feature",
+        "`OracleObservationSource`",
+        "`OracleService`",
+        "`OracleReplicatorFactory`",
+        "`OracleReplicator`",
+        "one exact local Primary member",
+        "write quorum one",
+        "zero remote replica descriptions",
+        "empty adapter-owned Kuberic history",
+        "`INVALID_LSN`",
+        "Catch-up configuration/quorum",
+        "Data loss",
+        "Build/remove",
+        "Close/Abort",
+        "cannot publish callback success after the generation changes",
+        "`RoleChange.service_address` is always `None`",
+        "not an Oracle listener",
+        "no Oracle driver",
+        "no runtime executable",
+        "no plaintext production mode",
+        "does not make Oracle Free electable, replicated, or Data Guard capable",
     ] {
         assert!(contract.contains(required), "{required}");
     }
 
-    for absent_capability in [
-        "role and epoch management",
-        "generic LSN or progress reporting",
-        "previous/current replica-set configuration",
-        "catch-up capability or quorum waiting",
-        "build, copy, remove, or replacement authority",
-        "data-loss callbacks or authorization",
-        "election, promotion, switchover, or failover",
-        "client routing",
-        "replication transport",
+    for forbidden_claim in [
+        "converted into Kuberic LSN",
+        "Oracle Free performs native replication",
+        "no Oracle client service address",
+        "Data Guard endpoint",
     ] {
-        assert!(contract.contains(absent_capability), "{absent_capability}");
+        assert!(contract.contains(forbidden_claim), "{forbidden_claim}");
     }
 }
 
@@ -207,20 +189,23 @@ fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
     let per_document = [
         (
             "README.md",
-            ["standalone, observe-only, non-electable", "fake Replicator"],
+            [
+                "standalone, observe-only, non-electable",
+                "optional custom singleton Replicator",
+            ],
         ),
         (
             "docs/design.md",
             [
-                "pending the proposed generic",
-                "must not be satisfied with a fake Replicator",
+                "an optional exact-revision Kuberic dependency",
+                "progress zero as the adapter's empty Kuberic history",
             ],
         ),
         (
             "docs/kuberic-progress.md",
             [
-                "Capability absent; no callback exists",
-                "Publish neither a client service address nor a replication endpoint",
+                "Return zero for empty adapter-owned Kuberic history",
+                "Publish no Oracle client service address",
             ],
         ),
         (
@@ -246,7 +231,7 @@ fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
         "independent fencing",
         "identity separation",
         "native exact-completion proof",
-        "generic observation-only Open/Observe/Close/Abort boundary and a registrable third conformance subject do not exist upstream",
+        "no production runtime executable, non-plaintext Oracle observation source, deployment/storage evidence binding, or upstream Oracle conformance subject exists",
     ] {
         assert!(
             readiness.contains(required),
