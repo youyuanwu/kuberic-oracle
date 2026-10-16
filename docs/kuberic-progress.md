@@ -140,55 +140,60 @@ The
 defines the non-substitution rules for Oracle, Kuberic, and external
 deployment/storage identities.
 
-## Initial Kuberic behavior
+## Selected Kuberic baseline and initial behavior
 
-Oracle Free requires a future observation-only hosting boundary that may
-validate fresh native identity and role evidence. It must not pretend to
-implement replication callbacks, mutate Oracle, or fabricate unsupported
-capabilities.
+The selected upstream baseline is commit
+`28b181bb1846d057cce5913513a46ed72de4c977`. Public V1 protocol `11` and local
+agent schema `12` are the sole selected production contract; the legacy and
+preview selectors and fallback are removed or rejected
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:68-75`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:500-525`).
+The complete baseline is preserved in the
+[selected upstream evidence table](observation-only-hosting-contract.md#selected-upstream-facts).
 
-That integration is blocked on Kuberic Phase 5's future public V1
-values/evidence contract. Oracle DBID/current-incarnation/resetlogs/startup/SCN
-evidence is not itself `HistoryContext`, a Kuberic replica incarnation,
-`ReplicatorCapabilities`, or Kuberic progress. Those mappings require the
-future public contract.
+The selected API is SF-shaped: every hosted `StatefulServiceReplica` returns a
+`Replicator`, and the public surface includes role, epoch, progress,
+configuration, catch-up, build/remove, data-loss authorization, replay, and
+exact completion semantics
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:184-343`;
+`28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:44-83`).
+Successful role or lifecycle callbacks cannot be observational no-ops: public
+completion is semantic evidence that the exact operation-specific
+postcondition was established.
 
-The local protocol-11/schema-8 Public V1 preview is dormant reference material,
-not that future contract. It is incompatible with production protocol
-9/schema 6, disposable, has no storage-migration contract, is rejected by
-production evaluation, and has not selected a replacement Replicator. The
-[Public V1 fit/no-fit matrix](data-guard-readiness.md#dormant-kuberic-public-v1-fitno-fit)
-records conceptual fit and blockers without creating a dependency.
+PostgreSQL is the selected custom-Replicator reference. It supplies neither a
+`StateProvider` nor a `StateReplicator`, but it still returns an active
+service-owned `PgReplicator`; it is not an observe-only adapter
+(`28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:109-165`;
+`28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291`;
+`28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/replicator-boundary.md:79-89`).
 
-Successful future role and lifecycle callbacks cannot be implemented as
-observational no-ops. Public completion is semantic evidence that the exact
-operation-specific postcondition was established; it must not be inferred from
-an unchanged observation or from private ACK/copy/quorum facts.
+Oracle Free therefore still lacks a truthful hosted surface. It must not
+pretend to implement replication callbacks, mutate Oracle, or fabricate
+unsupported capabilities. The generic
+[observation-only hosting contract](observation-only-hosting-contract.md)
+proposes exactly Open, Observe, Close, and Abort with explicit capability
+absence. That proposal does not exist at the selected upstream commit.
 
 The
 [operation-completion matrix](data-guard-readiness.md#exact-operation-completion-matrix)
 separates Oracle-native state from repository request/attempt binding and
 defaults unattributable outcomes to ambiguous.
 
-The left column is behavioral shorthand, not a promise of public Kuberic
-methods with those exact names. Stage 3 must bind each behavior to the actual
-lifecycle, role, progress, configuration, build/remove, data-loss, and returned
-service-address contracts.
+The observation-only proposal maps Oracle standalone behavior without
+implementing Replicator-shaped placeholders:
 
-The initial mapping is:
-
-| Kuberic behavior | Oracle standalone response |
+| Proposed observation-only behavior | Oracle standalone response |
 |---|---|
-| Open application | Connect and validate configured target |
-| Validate primary role | Require native `PRIMARY` and `READ WRITE` |
-| Validate secondary role | Reject as unsupported |
-| Current progress | Reject until a safe contract is defined |
-| Catch-up capability | Reject as unsupported |
-| Build/remove replica | Reject as unsupported |
-| Previous/current configuration | Reject mutation |
-| Data-loss callback | Reject as unsupported |
-| Write access | Do not publish a client service address |
-| Switchover/failover | Reject as unsupported |
+| Open | Bind resource, replica, process-session, storage-incarnation, and configured Oracle target identities |
+| Observe | Require fresh bounded native identity, lineage, `PRIMARY`, and `READ WRITE` evidence |
+| Close | Stop new observations, resolve accepted attempts, and seal publication |
+| Abort | Seal publication, cancel in-flight work, and remain idempotently terminal |
+| Replication/election/progress/configuration/build/remove/data-loss | Capability absent; no callback exists |
+| Addresses | Publish neither a client service address nor a replication endpoint |
 
 Failure must be explicit. Zero, last-known values, endpoint reachability, or a
 healthy listener must not be returned as success-shaped substitutes.

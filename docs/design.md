@@ -493,18 +493,31 @@ Still deferred:
 
 ### Stage 3: Kuberic observe-only runtime
 
-Stage 3 is blocked on Kuberic Phase 5's future public V1 values/evidence
-contract. Oracle DBID/incarnation/resetlogs/startup/SCN evidence is not itself
-Kuberic `HistoryContext`, replica incarnation, `ReplicatorCapabilities`, or
-progress. Successful future role or lifecycle callbacks cannot be
-observational no-ops: public completion is semantic evidence of the exact
-operation's postcondition.
+Kuberic Public V1 is selected at independently reviewable upstream commit
+`28b181bb1846d057cce5913513a46ed72de4c977`. Protocol `11` and local agent
+schema `12` are the sole selected production contract, and the legacy/preview
+selectors are removed
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:663-672`).
+The complete citations are centralized in the
+[selected upstream evidence table](observation-only-hosting-contract.md#selected-upstream-facts).
 
-The local protocol-11/schema-8 Public V1 preview is reference evidence only:
-it is incompatible, disposable, has no migration contract, is rejected by
-production evaluation, and has not selected a replacement Replicator. The
-[fit/no-fit matrix](data-guard-readiness.md#dormant-kuberic-public-v1-fitno-fit)
-does not make it a dependency.
+Selection resolves the old Phase 5 baseline blocker, but it does not create an
+observation-only host. `StatefulServiceReplica::open` still returns a
+`Replicator`, whose public semantics include role, epoch, progress,
+configuration, build/remove, data-loss, and exact completion
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`;
+`28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:13-30`;
+`28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:44-67`).
+Oracle DBID/incarnation/resetlogs/startup/SCN evidence is not itself Kuberic
+`HistoryContext`, replica incarnation, `ReplicatorCapabilities`, or progress,
+and those callbacks cannot be observational no-ops.
+
+Stage 3 therefore remains unimplemented pending the proposed generic
+[observation-only hosting contract](observation-only-hosting-contract.md).
+That proposal is not an upstream API and must not be satisfied with a fake
+Replicator.
 
 - host one already provisioned Oracle member through Kuberic's public process
   boundary;
@@ -512,7 +525,8 @@ does not make it a dependency.
   session;
 - validate requested role against fresh Oracle evidence;
 - expose no client service address until routing is separately designed; and
-- publish no generic progress until the progress contract is proven.
+- publish no generic progress, replication endpoint, or success-shaped absent
+  capability.
 
 ### Stage 4: Enterprise Data Guard research and fixture
 
@@ -526,8 +540,10 @@ does not make it a dependency.
   operation-completion, and identity matrices as the minimum evidence set;
 - determine the product and licensing implications of every admitted native
   state, including `READ ONLY WITH APPLY`, for the selected CDB/PDB use;
-- wait for a stable selected Kuberic public contract rather than mapping SCN
-  to a dormant scalar progress preview; and
+- use the selected Public V1 custom-Replicator API as the architectural base,
+  while retaining all Oracle-native artifact, licensing, topology, principal,
+  fencing, and exact-completion gates rather than mapping SCN to Kuberic
+  progress; and
 - enforce the [readiness stop conditions](data-guard-readiness.md#stop-conditions).
 
 ### Stage 5: authority-changing operations

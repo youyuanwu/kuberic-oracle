@@ -28,14 +28,16 @@ verified facts only for the cited version. Binding requirements, allowed and
 forbidden inferences, topology rules, and completion rules are repository
 design choices unless a cell explicitly marks an item unknown.
 
-The dormant Kuberic analysis is a **local contextual observation** of full
-commits `5c202ec53104e536568d664dafadfb05f89bdd1a` and
-`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20` from
-`https://github.com/youyuanwu/kuberic.git`. Those objects were available in the
-required adjacent checkout but were not independently retrievable from the
-released `kuberic-oracle` repository. The fit matrix is therefore not an
-authoritative integration baseline. A future integration must publish or
-otherwise preserve the selected upstream objects and repeat the analysis.
+The Kuberic analysis uses the independently reviewable selected upstream
+baseline `youyuanwu/kuberic` commit
+`28b181bb1846d057cce5913513a46ed72de4c977`. Citations use immutable
+`<commit>:<path>:<line-range>` references. Public V1 protocol `11` and local
+agent schema `12` are the selected production contract
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`).
+The [observation-only hosting contract](observation-only-hosting-contract.md#selected-upstream-facts)
+preserves the complete evidence table and separately labels the repository
+proposal.
 
 ## Current repository boundary
 
@@ -68,8 +70,8 @@ current-incarnation tuple to the configured target
 [`observation.rs:41-49`](../crates/kuberic-oracle/src/observation.rs#L41-L49)).
 The server-free tests separately reject a target DBID/name mismatch and every
 field mismatch in the current-incarnation tuple
-([`target_identity_must_match`](../crates/kuberic-oracle-tests/tests/contract.rs#L256-L277),
-[`target_incarnation_must_match_even_when_dbid_matches`](../crates/kuberic-oracle-tests/tests/contract.rs#L280-L309)).
+([`target_identity_must_match`](../crates/kuberic-oracle-tests/tests/contract.rs#L305-L326),
+[`target_incarnation_must_match_even_when_dbid_matches`](../crates/kuberic-oracle-tests/tests/contract.rs#L329-L357)).
 
 **Verified fact:** the test-only Oracle Free proof shows that a fresh
 image-derived volume can reproduce the same DBID/current-incarnation tuple.
@@ -290,10 +292,10 @@ not implemented Oracle operations.
 | Oracle progress | Current SCN, transported/archived/applied redo, lag/gap evidence | Native ordering and Data Guard state | Kuberic LSN, committed/quorum progress, or exact completion |
 | Oracle instance | Instance name, host, startup time, status | Restart and instance evidence | Database lineage or deployment/storage replacement |
 | Oracle observer connection | Future driver/session identifier and sample bracket | One observation attempt | Kuberic process session or durable operation attempt |
-| Kuberic resource/history | Dormant `ResourceUid`, `Epoch` | Preview lifecycle and authority domains | Oracle DBID/incarnation/SCN |
-| Kuberic replica | Dormant logical replica, instance ID, agent generation | Exact preview replica incarnation | Oracle `DB_UNIQUE_NAME` or fixture container |
-| Kuberic process session | Dormant `ProcessSessionId` | One upstream identity with two uses: hosting/Open lifetime and intent/report authority | Oracle instance startup, Oracle connection session, or repository operation attempt |
-| Kuberic storage | Dormant `PvcUid` and build authorization | Preview durable allocation and copy target | Oracle DBID/incarnation |
+| Kuberic resource/history | Selected `PublicV1Identity`, `Epoch`, and `HistoryContext` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:142-208`) | Public V1 lifecycle, authority, and history domains | Oracle DBID/incarnation/SCN |
+| Kuberic replica | Selected `ReplicaIdentity` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | Logical replica, process incarnation, and durable replica identity | Oracle `DB_UNIQUE_NAME` or fixture container |
+| Kuberic process session | Selected `ProcessSessionEndpoint` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | One hosted process/Open lifetime and report authority | Oracle instance startup, Oracle connection session, or repository operation attempt |
+| Kuberic storage | Selected `ReplicaStorageIncarnationContext` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | Durable allocation/incarnation and build target identity | Oracle DBID/incarnation |
 | Fixture/deployment | Container, volume, network, endpoint, owner token, future Pod/PVC/deployment IDs | External ownership and allocation evidence | Oracle-native lineage or Kuberic history |
 
 The Oracle Free clone result is the concrete non-substitution proof: an
@@ -322,41 +324,30 @@ the configured immutable database/member or infrastructure identity rather
 than a mutable endpoint name alone. This phase does not implement TLS or select
 the trust model.
 
-## Dormant Kuberic Public V1 fit/no-fit
+## Selected Kuberic Public V1 fit/no-fit
 
-This section uses only local commits
-`5c202ec53104e536568d664dafadfb05f89bdd1a` and
-`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20`, inspected as
-`<full-sha>:<path>`. The pinned design calls the preview dormant and incompatible,
-assigns it protocol 11/schema 8 while production remains protocol 9/schema 6,
-and states that it has no storage-migration contract and may require a fresh
-preview store
-(`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:docs/features/kuberic/replicator-boundary.md:148-154`).
-Production normalization rejects Public V1 status
-([`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-controller/src/normalize.rs:87-97`]) and preview storage has
-no cross-version opener
-([`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/host/tests/public_operations.rs:263-304`]).
-The pinned design also states that Phase 5 has not selected a replacement
-Replicator or changed the legacy production path
-(`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:docs/features/kuberic/replicator-boundary.md:189-190`). The preview
-is therefore disposable contextual reference evidence, not an independently
-retrievable release baseline or migration target. Later preview changes were
-not reviewed; targeting them requires publication/preservation of the selected
-objects and a new analysis from a clean checkout.
+Public V1 protocol `11` / local agent schema `12` is selected, and legacy or
+preview selector paths are removed
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:663-672`).
+The selected SF-aligned custom-Replicator API is sufficient as the
+architectural base for a future full Data Guard integration. It is not a
+truthful Oracle Free host because every `StatefulServiceReplica::open` returns
+a `Replicator` and completion certifies role/progress/configuration/build or
+other operation-specific postconditions
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`;
+`28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/service-fabric-api-semantics.md:44-67`).
 
-| Concept | Pinned preview evidence | Data Guard fit | Blocker / upstream decision |
+| Concept | Selected Public V1 evidence | Data Guard fit | Remaining Oracle/upstream gate |
 |---|---|---|---|
-| Resource | `ResourceUid` and lifecycle generation (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:57-77`) | Fit for binding one hosted integration resource. | No production Public V1 resource contract is selected. |
-| History | `Epoch { data_loss_number, configuration_number }` (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/types.rs:121-136`) | Partial fit: Data Guard failover/configuration changes need separate authority dimensions. | Oracle incarnation/resetlogs cannot be declared equivalent to `Epoch`; admission rules need upstream definition. |
-| Replica | `ReplicaIdentity` separates logical replica, instance, and durable generation (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/types.rs:181-186`) | Conceptual fit for primary/standby member incarnations. | Mapping from Oracle member plus deployment identity is unselected. |
-| Process | Public reports use `ProcessSessionId` for one hosted process/Open lifetime (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:1067-1086`). | Fit for one hosted process/Open attempt. | This is one use of the same upstream type named in the next row; Oracle instance identity is not this identity. |
-| Session | The same `ProcessSessionId` binds intents and reports (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:351-365`). | Partial fit for intent/report authority within that process session. | Oracle connection sessions and repository operation attempts remain separate identities. |
-| Storage | `PvcUid` binds build source and target storage (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:576-610`) | Strong conceptual fit for external storage evidence and rebuild targets. | The preview storage model is dormant and non-migratable. |
-| Evidence | Public V1 rejects legacy/native evidence fields (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/control/convert.rs:182-277,344-379`) | No fit for transporting the full Oracle evidence matrix directly. | A future extension contract or separate evidence channel is required. |
-| Progress | `PublicProgress { role, first, last }` (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:998-1026`) | No safe direct fit: Oracle evidence is multidimensional. | No SCN-to-LSN/range conversion is allowed. |
-| Exact completion | Completion retains operation ID, revision, input digest, replay disposition, and a typed result (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:1030-1046`) | Strong conceptual fit for repository attempt-bound outcomes. | Oracle-native state cannot populate exact completion without a repository journal and a selected upstream contract. |
-| Rebuild | Typed rebuild-required reasons and exact local storage (`b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20:kuberic-runtime/src/protocol/public_operations.rs:935-992`) | Conceptual fit for incompatible history and replacement storage. | Oracle-specific history admission and source/target authorization remain undesigned. |
-| Hosting | No selected replacement replication implementation; production rejects the preview. | No fit for Oracle Free replication callbacks. | Upstream must provide or select a stable observation-only hosting boundary before Oracle Free integration. |
+| Resource/history | `PublicV1Identity`, `Epoch`, and `HistoryContext` are selected public domains (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:142-208`) | Architectural fit for hosted resource and authority history. | Oracle incarnation/resetlogs remains native evidence and cannot be declared equivalent to Kuberic history. |
+| Replica/process/storage | `ReplicaIdentity`, `ProcessSessionEndpoint`, and `ReplicaStorageIncarnationContext` are selected identities (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | Strong fit for independent member, process, and storage binding. | Oracle database, instance, observer, deployment, and storage identities must remain separate and mapping requires implementation evidence. |
+| Progress | `INVALID_LSN`, `PublicProgress`, and role/progress operations are selected (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:184-343`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:992-1055`) | A full custom Data Guard Replicator could implement these only after native mapping is proven. | Oracle evidence is multidimensional; no SCN-to-LSN or placeholder progress is allowed. |
+| Replay/exact completion | Public operations carry replay disposition, data-loss authorization, typed results, and exact completion (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2154-2195`; `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:2200-2247`) | Strong architectural fit for request/attempt-bound outcomes. | Oracle-native state cannot prove causality without a durable operation journal, fencing, and native postcondition evidence. |
+| Custom Replicator | PostgreSQL supplies neither `StateProvider` nor `StateReplicator`, but returns an active service-owned custom Replicator (`28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291`) | Confirms that an external engine may own replication/copy behavior. | PostgreSQL is not an observation-only precedent and does not justify fake callbacks for Oracle Free. |
+| Hosting | The current host requires a returned `Replicator` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80`) | Fits a future active Data Guard Replicator after every independent gate closes. | A separate generic observation-only host remains proposed, not selected upstream behavior. |
+| Conformance | Subjects are hard-coded as `postgresql` and `built-in-replacement` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:915-1002`) | Existing selected subjects can be reviewed. | A third custom observation-only subject needs a registrable conformance path. |
 
 ### Oracle Free hosting decision
 
@@ -364,9 +355,11 @@ objects and a new analysis from a clean checkout.
 observation-only hosting boundary. It must not pretend to implement
 replication callbacks, secondary progress, catch-up, build/copy, data-loss,
 switchover, failover, or election. The benefit is truthful capability and
-authority separation. The cost is a distinct future upstream hosting path.
-Because no stable upstream boundary is selected, runtime integration remains
-stopped.
+authority separation. The generic
+[Open/Observe/Close/Abort proposal](observation-only-hosting-contract.md#proposed-generic-hosting-boundary)
+defines explicit capability absence, no client service address, and no
+replication endpoint. It is a repository proposal, not an upstream feature, so
+Oracle Free runtime integration remains stopped without a fake Replicator.
 
 ## Stop conditions
 
@@ -400,10 +393,11 @@ is unresolved:
     authorization/fencing principals; deny rules; credential handling; and
     authenticated encrypted channels with peer-name verification are not
     separately designed.
-12. **Upstream contract:** the replacement Kuberic public contract and
-    observation-only hosting boundary are not stable and selected, or the
-    selected upstream objects are not durably retrievable for independent
-    review.
+12. **Observation-only hosting:** the selected Public V1 objects are durably
+    reviewable and sufficient as the base for a future full custom Replicator,
+    but a generic observation-only Open/Observe/Close/Abort boundary and a
+    registrable third conformance subject do not exist upstream. Oracle Free
+    must remain unhosted rather than use fake Replicator/progress semantics.
 13. **Oracle Free:** any design would make Free electable, mutable,
     replicated, or Data Guard capable.
 
@@ -427,9 +421,16 @@ artifacts are not that durable record and remain uncommitted.
 
 ## What this phase proves
 
+The updated readiness verdict is: **the selected SF-aligned custom Replicator
+API is a sufficient architectural base, but Data Guard implementation remains
+blocked**. The independent blockers are Enterprise artifact and licensing
+approval, selected version evidence, authorized one-primary/two-standby
+topology, least-privilege principal and channel design, broker selection,
+independent fencing, identity separation, and native exact-completion proof.
+
 This phase proves only that the repository has an evidence vocabulary,
-identity boundaries, fit analysis, and explicit stop conditions for future
-research. It does not prove that an Enterprise lab can currently be
-distributed or run, that any member is safe to promote, that Oracle state can
-be converted to Kuberic progress, or that exact operation completion is
-implemented.
+identity boundaries, selected-baseline fit analysis, and explicit stop
+conditions for future research. It does not prove that an Enterprise lab can
+currently be distributed or run, that any member is safe to promote, that
+Oracle state can be converted to Kuberic progress, or that exact operation
+completion is implemented.

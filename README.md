@@ -33,8 +33,26 @@ crate; plaintext is not a supported production mode.
 See the [support and safety design](docs/design.md) and
 [Kuberic progress analysis](docs/kuberic-progress.md). The
 [Data Guard readiness contract](docs/data-guard-readiness.md) records the
-Enterprise lab evidence matrix, dormant Public V1 fit analysis, and explicit
-implementation stop conditions.
+Enterprise lab evidence matrix, selected Public V1 fit analysis, and explicit
+implementation stop conditions. The
+[observation-only hosting contract](docs/observation-only-hosting-contract.md#selected-upstream-facts)
+centralizes facts from the selected upstream baseline; its later proposal
+section defines the generic hosting boundary that Kuberic does not yet
+provide.
+
+The selected upstream baseline is Kuberic commit
+`28b181bb1846d057cce5913513a46ed72de4c977`: Public V1 protocol `11`
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`)
+and local agent schema `12`
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`)
+are the sole selected production contract. The legacy engine, preview mode,
+selectors, and fallback are removed
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:34-36`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:500-525`).
+Kuberic remains experimental and source-only, without published production
+images or an activation procedure
+(`28b181bb1846d057cce5913513a46ed72de4c977:README.md:3-5`;
+`28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:160-170`).
 
 ## Initial deployment decision
 
@@ -104,6 +122,9 @@ accept license terms on behalf of an operator.
   implementation, and safety rules.
 - `docs/kuberic-progress.md` explains why Oracle SCNs are retained as native
   evidence but are not yet exposed as Kuberic promotion progress.
+- `docs/observation-only-hosting-contract.md` pins the selected Public V1
+  baseline and proposes a generic Open/Observe/Close/Abort hosting boundary
+  with explicit replication-capability absence.
 
 Dependency versions are declared in the root `Cargo.toml`.
 
@@ -177,6 +198,8 @@ The initial profile does not provide:
 - automatic failover, switchover, promotion, or broker mutation;
 - election, role/configuration mutation, catch-up, build/copy, data-loss, or
   client-service routing behavior;
+- a fake Replicator, fabricated progress, or success-shaped placeholders for
+  absent capabilities;
 - RAC, sharding, GoldenGate, or application-level logical replication;
 - Kubernetes manifests or an Oracle operator;
 - a production deployment guide; or
