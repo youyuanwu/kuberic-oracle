@@ -217,6 +217,55 @@ fn free_standalone_profile_rejects_standby_role() {
 }
 
 #[test]
+fn oracle_free_boundary_remains_singleton_and_observation_only() {
+    assert_eq!(
+        config(
+            EditionProfile::Free,
+            ReplicationProfile::DataGuardPhysical,
+            3,
+        )
+        .validate(),
+        Err(ContractError::DataGuardRequiresEnterprise)
+    );
+    assert!(matches!(
+        config(EditionProfile::Free, ReplicationProfile::Standalone, 2).validate(),
+        Err(ContractError::UnsupportedReplicaCount {
+            profile: "standalone",
+            expected: 1,
+            actual: 2,
+        })
+    ));
+    assert_eq!(
+        admit_observation(
+            &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+            &target(),
+            &observation(
+                EditionProfile::Free,
+                DatabaseRole::PhysicalStandby,
+                OpenMode::Mounted,
+            ),
+            10_000,
+            500,
+        ),
+        Err(ContractError::UnsupportedDatabaseRole)
+    );
+
+    let admitted = admit_observation(
+        &config(EditionProfile::Free, ReplicationProfile::Standalone, 1),
+        &target(),
+        &observation(
+            EditionProfile::Free,
+            DatabaseRole::Primary,
+            OpenMode::ReadWrite,
+        ),
+        10_000,
+        500,
+    )
+    .unwrap();
+    assert_eq!(admitted.role, DatabaseRole::Primary);
+}
+
+#[test]
 fn stale_observation_is_rejected() {
     assert_eq!(
         admit_observation(

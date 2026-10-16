@@ -3,6 +3,15 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const SELECTED_KUBERIC_COMMIT: &str = "28b181bb1846d057cce5913513a46ed72de4c977";
+const DOCUMENTS: [&str; 5] = [
+    "README.md",
+    "docs/data-guard-readiness.md",
+    "docs/design.md",
+    "docs/kuberic-progress.md",
+    "docs/observation-only-hosting-contract.md",
+];
+
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -20,7 +29,7 @@ fn readiness_contract_has_required_sections_and_integrations() {
         "## Native evidence matrix",
         "## Exact operation-completion matrix",
         "## Identity-domain matrix",
-        "## Dormant Kuberic Public V1 fit/no-fit",
+        "## Selected Kuberic Public V1 fit/no-fit",
         "## Stop conditions",
     ] {
         assert!(readiness.contains(heading), "{heading}");
@@ -32,30 +41,162 @@ fn readiness_contract_has_required_sections_and_integrations() {
         read("docs/kuberic-progress.md")
             .contains("(data-guard-readiness.md#identity-domain-matrix)")
     );
+    assert!(read("README.md").contains("(docs/observation-only-hosting-contract.md)"));
+    assert!(read("docs/design.md").contains("(observation-only-hosting-contract.md)"));
+    assert!(read("docs/kuberic-progress.md").contains("(observation-only-hosting-contract.md)"));
 }
 
 #[test]
-fn readiness_contract_cites_stable_identity_guards_and_preview_pins() {
+fn selected_public_v1_baseline_is_pinned_with_immutable_evidence() {
     let readiness = read("docs/data-guard-readiness.md");
     for evidence in [
         "target_identity_must_match",
         "target_incarnation_must_match_even_when_dbid_matches",
-        "5c202ec53104e536568d664dafadfb05f89bdd1a",
-        "b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20",
     ] {
         assert!(readiness.contains(evidence), "{evidence}");
     }
+
+    let required_citations = [
+        (
+            "README.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29",
+        ),
+        (
+            "docs/design.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80",
+        ),
+        (
+            "docs/kuberic-progress.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:examples/postgres/src/service.rs:249-291",
+        ),
+        (
+            "docs/data-guard-readiness.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:915-1002",
+        ),
+        (
+            "docs/observation-only-hosting-contract.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:160-170",
+        ),
+    ];
+    for (path, citation) in required_citations {
+        assert!(read(path).contains(citation), "{path}: {citation}");
+    }
+
+    for path in DOCUMENTS {
+        assert!(
+            read(path).contains(SELECTED_KUBERIC_COMMIT),
+            "{path} must cite the selected baseline"
+        );
+    }
+}
+
+#[test]
+fn stale_preview_baselines_cannot_return() {
+    let forbidden = [
+        "5c202ec53104e536568d664dafadfb05f89bdd1a",
+        "b0e96aa2a4dc3872b55f2485cdd51b9f0d5ead20",
+        "protocol-11/schema-8",
+        "production protocol 9/schema 6",
+        "production remains protocol 9/schema 6",
+        "Dormant Kuberic Public V1",
+        "Phase 5's future public V1",
+        "has not selected a replacement Replicator",
+    ];
+
+    for path in DOCUMENTS {
+        let content = read(path);
+        for stale in forbidden {
+            assert!(!content.contains(stale), "{path}: {stale}");
+        }
+    }
+}
+
+#[test]
+fn observation_only_contract_is_bounded_and_has_no_replication_placeholders() {
+    let contract = normalize_whitespace(&read("docs/observation-only-hosting-contract.md"));
+    for required in [
+        "proposal only",
+        "exactly four operations",
+        "**Open**",
+        "**Observe**",
+        "**Close**",
+        "**Abort**",
+        "resource identity",
+        "logical replica identity",
+        "process-session identity",
+        "storage-incarnation identity",
+        "absolute completion deadline",
+        "maximum acceptable evidence age",
+        "deadline_met",
+        "maximum_age_met",
+        "cannot reuse cached success",
+        "Cancellation:",
+        "Process restart:",
+        "Stale session:",
+        "Storage replacement:",
+        "Fault:",
+        "Close race:",
+        "Abort race:",
+        "client service address",
+        "replication endpoint",
+        "Make conformance subjects registrable",
+        "same boundary must be usable by any external",
+        "No Oracle Free adapter may implement a fake `Replicator`",
+    ] {
+        assert!(contract.contains(required), "{required}");
+    }
+
+    for absent_capability in [
+        "role and epoch management",
+        "generic LSN or progress reporting",
+        "previous/current replica-set configuration",
+        "catch-up capability or quorum waiting",
+        "build, copy, remove, or replacement authority",
+        "data-loss callbacks or authorization",
+        "election, promotion, switchover, or failover",
+        "client routing",
+        "replication transport",
+    ] {
+        assert!(contract.contains(absent_capability), "{absent_capability}");
+    }
+}
+
+#[test]
+fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
+    let combined = normalize_whitespace(
+        &DOCUMENTS
+            .map(read)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    for required in [
+        "standalone, observe-only, non-electable",
+        "mutation-free",
+        "Data Guard-free",
+        "fake Replicator",
+        "fabricated progress",
+        "Enterprise artifact",
+        "licensing",
+        "one-primary/two-standby",
+        "principal",
+        "fencing",
+        "exact-completion",
+        "sufficient architectural base",
+        "implementation remains blocked",
+    ] {
+        assert!(combined.contains(required), "{required}");
+    }
+}
+
+fn normalize_whitespace(content: &str) -> String {
+    content.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[test]
 fn relative_markdown_links_resolve() {
     let root = workspace_root();
-    let documents = [
-        root.join("README.md"),
-        root.join("docs/data-guard-readiness.md"),
-        root.join("docs/design.md"),
-        root.join("docs/kuberic-progress.md"),
-    ];
+    let documents = DOCUMENTS.map(|path| root.join(path));
 
     for document in documents {
         let content = fs::read_to_string(&document).unwrap();
