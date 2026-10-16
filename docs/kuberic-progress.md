@@ -12,6 +12,15 @@ configuration explicitly authorizes that default live proof; the server-free
 override disables it. This evidence does
 not turn any Oracle number into complete replication or promotion authority.
 
+The proposed
+[Enterprise replication and HA design](replication-ha-design.md#kuberic-lsn-contract)
+specifies a future certified closed-redo-prefix SCN mapping: secondary durable
+receipt, applied recovery, and primary quorum commitment remain distinct.
+It defines numeric representation, lineage/history admission, retention,
+build/join boundaries, and uncertified-tail limitations. This is not a mapping
+implemented by the current adapter, and it does not close native-evidence or
+HA safety gates.
+
 ## Standalone Free profile
 
 Oracle AI Database Free is initially supported as one standalone `PRIMARY`

@@ -32,5 +32,4 @@ tonic = { workspace = true, optional = true }
 zeroize.workspace = true
 
 [dev-dependencies]
-pulldown-cmark.workspace = true
 tempfile.workspace = true

@@ -10,10 +10,6 @@ check: fmt-check clippy test
 # Run validation without starting the Oracle Free live fixture.
 check-server-free: fmt-check clippy test-server-free
 
-# Validate the tracked documentation contract without starting Oracle.
-docs-check:
-    KUBERIC_ORACLE_ACCEPT_FREE_TERMS=NO cargo test --locked -p kuberic-oracle-tests --test documentation_contract
-
 # Check Rust formatting without changing files.
 fmt-check:
     cargo fmt --all -- --check

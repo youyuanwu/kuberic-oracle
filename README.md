@@ -45,6 +45,10 @@ See the [support and safety design](docs/design.md) and
 [Data Guard readiness contract](docs/data-guard-readiness.md) records the
 Enterprise lab evidence matrix, selected Public V1 fit analysis, and explicit
 implementation stop conditions. The
+[replication and HA join design](docs/replication-ha-design.md) proposes
+Enterprise physical standby build/join, certified Kuberic LSN reporting,
+quorum policy, and fenced HA transitions; it is neither implemented nor
+approved for activation. The
 [observation-only hosting contract](docs/observation-only-hosting-contract.md#selected-upstream-facts)
 centralizes facts from the selected upstream baseline and defines the
 implemented fixed-API custom singleton Replicator boundary.
@@ -144,12 +148,6 @@ Run all checks, including the Oracle Free live proof:
 
 ```bash
 just check
-```
-
-Run only the tracked documentation contract:
-
-```bash
-just docs-check
 ```
 
 The equivalent commands are:
