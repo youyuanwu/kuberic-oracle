@@ -500,6 +500,8 @@ selectors are removed
 (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
 `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`;
 `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:663-672`).
+The complete citations are centralized in the
+[selected upstream evidence table](observation-only-hosting-contract.md#selected-upstream-facts).
 
 Selection resolves the old Phase 5 baseline blocker, but it does not create an
 observation-only host. `StatefulServiceReplica::open` still returns a

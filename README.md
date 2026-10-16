@@ -35,16 +35,20 @@ See the [support and safety design](docs/design.md) and
 [Data Guard readiness contract](docs/data-guard-readiness.md) records the
 Enterprise lab evidence matrix, selected Public V1 fit analysis, and explicit
 implementation stop conditions. The
-[observation-only hosting contract](docs/observation-only-hosting-contract.md)
-separates facts from the selected upstream baseline from the generic hosting
-proposal that Kuberic does not yet provide.
+[observation-only hosting contract](docs/observation-only-hosting-contract.md#selected-upstream-facts)
+centralizes facts from the selected upstream baseline; its later proposal
+section defines the generic hosting boundary that Kuberic does not yet
+provide.
 
 The selected upstream baseline is Kuberic commit
-`28b181bb1846d057cce5913513a46ed72de4c977`: Public V1 protocol `11` and local
-agent schema `12` are the sole selected production contract, with the legacy
-and preview selectors removed
-(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
-`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`).
+`28b181bb1846d057cce5913513a46ed72de4c977`: Public V1 protocol `11`
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`)
+and local agent schema `12`
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`)
+are the sole selected production contract. The legacy engine, preview mode,
+selectors, and fallback are removed
+(`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:34-36`;
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:500-525`).
 Kuberic remains experimental and source-only, without published production
 images or an activation procedure
 (`28b181bb1846d057cce5913513a46ed72de4c977:README.md:3-5`;

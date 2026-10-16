@@ -150,6 +150,8 @@ preview selectors and fallback are removed or rejected
 `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`;
 `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:68-75`;
 `28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/testing/public_v1_conformance.rs:500-525`).
+The complete baseline is preserved in the
+[selected upstream evidence table](observation-only-hosting-contract.md#selected-upstream-facts).
 
 The selected API is SF-shaped: every hosted `StatefulServiceReplica` returns a
 `Replicator`, and the public surface includes role, epoch, progress,

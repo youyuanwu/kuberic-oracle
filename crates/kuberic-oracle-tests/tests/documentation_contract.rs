@@ -41,9 +41,18 @@ fn readiness_contract_has_required_sections_and_integrations() {
         read("docs/kuberic-progress.md")
             .contains("(data-guard-readiness.md#identity-domain-matrix)")
     );
-    assert!(read("README.md").contains("(docs/observation-only-hosting-contract.md)"));
-    assert!(read("docs/design.md").contains("(observation-only-hosting-contract.md)"));
-    assert!(read("docs/kuberic-progress.md").contains("(observation-only-hosting-contract.md)"));
+    assert!(
+        read("README.md")
+            .contains("(docs/observation-only-hosting-contract.md#selected-upstream-facts)")
+    );
+    assert!(
+        read("docs/design.md")
+            .contains("(observation-only-hosting-contract.md#selected-upstream-facts)")
+    );
+    assert!(
+        read("docs/kuberic-progress.md")
+            .contains("(observation-only-hosting-contract.md#selected-upstream-facts)")
+    );
 }
 
 #[test]
@@ -62,6 +71,14 @@ fn selected_public_v1_baseline_is_pinned_with_immutable_evidence() {
             "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29",
         ),
         (
+            "README.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58",
+        ),
+        (
+            "README.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:34-36",
+        ),
+        (
             "docs/design.md",
             "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-80",
         ),
@@ -77,15 +94,32 @@ fn selected_public_v1_baseline_is_pinned_with_immutable_evidence() {
             "docs/observation-only-hosting-contract.md",
             "28b181bb1846d057cce5913513a46ed72de4c977:docs/features/kuberic/stateless-default-replicator.md:160-170",
         ),
+        (
+            "docs/observation-only-hosting-contract.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/application.rs:72-107",
+        ),
+        (
+            "docs/observation-only-hosting-contract.md",
+            "28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/replicator/mod.rs:955-961",
+        ),
     ];
     for (path, citation) in required_citations {
         assert!(read(path).contains(citation), "{path}: {citation}");
     }
 
     for path in DOCUMENTS {
+        let content = normalize_whitespace(&read(path));
         assert!(
-            read(path).contains(SELECTED_KUBERIC_COMMIT),
+            content.contains(SELECTED_KUBERIC_COMMIT),
             "{path} must cite the selected baseline"
+        );
+        assert!(
+            content.contains("protocol `11`") || content.contains("Protocol `11`"),
+            "{path} must identify Public V1 protocol 11"
+        );
+        assert!(
+            content.contains("schema `12`"),
+            "{path} must identify local agent schema 12"
         );
     }
 }
@@ -127,9 +161,13 @@ fn observation_only_contract_is_bounded_and_has_no_replication_placeholders() {
         "storage-incarnation identity",
         "absolute completion deadline",
         "maximum acceptable evidence age",
+        "started, observed, and completed timestamps",
+        "explicit engine health and evidence health",
         "deadline_met",
         "maximum_age_met",
         "cannot reuse cached success",
+        "one exact disposition: `succeeded`, `failed`, `cancelled`, or `ambiguous`",
+        "Repeated Abort calls are idempotent",
         "Cancellation:",
         "Process restart:",
         "Stale session:",
@@ -139,7 +177,10 @@ fn observation_only_contract_is_bounded_and_has_no_replication_placeholders() {
         "Abort race:",
         "client service address",
         "replication endpoint",
+        "Add a separate generic observation-only hosted interface",
+        "Add an immutable hosting-capability variant",
         "Make conformance subjects registrable",
+        "The proposal does not change Public V1 replication semantics, add a built-in credential contract, choose transport or TLS",
         "same boundary must be usable by any external",
         "No Oracle Free adapter may implement a fake `Replicator`",
     ] {
@@ -163,29 +204,54 @@ fn observation_only_contract_is_bounded_and_has_no_replication_placeholders() {
 
 #[test]
 fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
-    let combined = normalize_whitespace(
-        &DOCUMENTS
-            .map(read)
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
+    let per_document = [
+        (
+            "README.md",
+            ["standalone, observe-only, non-electable", "fake Replicator"],
+        ),
+        (
+            "docs/design.md",
+            [
+                "pending the proposed generic",
+                "must not be satisfied with a fake Replicator",
+            ],
+        ),
+        (
+            "docs/kuberic-progress.md",
+            [
+                "Capability absent; no callback exists",
+                "Publish neither a client service address nor a replication endpoint",
+            ],
+        ),
+        (
+            "docs/observation-only-hosting-contract.md",
+            ["mutation-free", "Data Guard-free"],
+        ),
+    ];
+    for (path, required) in per_document {
+        let content = normalize_whitespace(&read(path));
+        for value in required {
+            assert!(content.contains(value), "{path}: {value}");
+        }
+    }
+
+    let readiness = normalize_whitespace(&read("docs/data-guard-readiness.md"));
     for required in [
-        "standalone, observe-only, non-electable",
-        "mutation-free",
-        "Data Guard-free",
-        "fake Replicator",
-        "fabricated progress",
-        "Enterprise artifact",
-        "licensing",
-        "one-primary/two-standby",
-        "principal",
-        "fencing",
-        "exact-completion",
-        "sufficient architectural base",
-        "implementation remains blocked",
+        "the selected SF-aligned custom Replicator API is a sufficient architectural base, but Data Guard implementation remains blocked",
+        "Enterprise artifact and licensing approval",
+        "selected version evidence",
+        "authorized one-primary/two-standby topology",
+        "least-privilege principal and channel design",
+        "broker selection",
+        "independent fencing",
+        "identity separation",
+        "native exact-completion proof",
+        "generic observation-only Open/Observe/Close/Abort boundary and a registrable third conformance subject do not exist upstream",
     ] {
-        assert!(combined.contains(required), "{required}");
+        assert!(
+            readiness.contains(required),
+            "docs/data-guard-readiness.md: {required}"
+        );
     }
 }
 

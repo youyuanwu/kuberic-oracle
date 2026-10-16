@@ -34,7 +34,7 @@ baseline `youyuanwu/kuberic` commit
 `<commit>:<path>:<line-range>` references. Public V1 protocol `11` and local
 agent schema `12` are the selected production contract
 (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/public_operations.rs:12-29`;
-`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:34-36`).
+`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/README.md:52-58`).
 The [observation-only hosting contract](observation-only-hosting-contract.md#selected-upstream-facts)
 preserves the complete evidence table and separately labels the repository
 proposal.
@@ -70,8 +70,8 @@ current-incarnation tuple to the configured target
 [`observation.rs:41-49`](../crates/kuberic-oracle/src/observation.rs#L41-L49)).
 The server-free tests separately reject a target DBID/name mismatch and every
 field mismatch in the current-incarnation tuple
-([`target_identity_must_match`](../crates/kuberic-oracle-tests/tests/contract.rs#L256-L277),
-[`target_incarnation_must_match_even_when_dbid_matches`](../crates/kuberic-oracle-tests/tests/contract.rs#L280-L309)).
+([`target_identity_must_match`](../crates/kuberic-oracle-tests/tests/contract.rs#L305-L326),
+[`target_incarnation_must_match_even_when_dbid_matches`](../crates/kuberic-oracle-tests/tests/contract.rs#L329-L357)).
 
 **Verified fact:** the test-only Oracle Free proof shows that a fresh
 image-derived volume can reproduce the same DBID/current-incarnation tuple.
@@ -292,10 +292,10 @@ not implemented Oracle operations.
 | Oracle progress | Current SCN, transported/archived/applied redo, lag/gap evidence | Native ordering and Data Guard state | Kuberic LSN, committed/quorum progress, or exact completion |
 | Oracle instance | Instance name, host, startup time, status | Restart and instance evidence | Database lineage or deployment/storage replacement |
 | Oracle observer connection | Future driver/session identifier and sample bracket | One observation attempt | Kuberic process session or durable operation attempt |
-| Kuberic resource/history | Selected `PublicV1Identity`, `Epoch`, and `HistoryContext` | Public V1 lifecycle, authority, and history domains | Oracle DBID/incarnation/SCN |
-| Kuberic replica | Selected `ReplicaIdentity` | Logical replica, process incarnation, and durable replica identity | Oracle `DB_UNIQUE_NAME` or fixture container |
-| Kuberic process session | Selected `ProcessSessionEndpoint` | One hosted process/Open lifetime and report authority | Oracle instance startup, Oracle connection session, or repository operation attempt |
-| Kuberic storage | Selected `ReplicaStorageIncarnationContext` | Durable allocation/incarnation and build target identity | Oracle DBID/incarnation |
+| Kuberic resource/history | Selected `PublicV1Identity`, `Epoch`, and `HistoryContext` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:142-208`) | Public V1 lifecycle, authority, and history domains | Oracle DBID/incarnation/SCN |
+| Kuberic replica | Selected `ReplicaIdentity` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | Logical replica, process incarnation, and durable replica identity | Oracle `DB_UNIQUE_NAME` or fixture container |
+| Kuberic process session | Selected `ProcessSessionEndpoint` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | One hosted process/Open lifetime and report authority | Oracle instance startup, Oracle connection session, or repository operation attempt |
+| Kuberic storage | Selected `ReplicaStorageIncarnationContext` (`28b181bb1846d057cce5913513a46ed72de4c977:kuberic-runtime/src/protocol/types.rs:241-338`) | Durable allocation/incarnation and build target identity | Oracle DBID/incarnation |
 | Fixture/deployment | Container, volume, network, endpoint, owner token, future Pod/PVC/deployment IDs | External ownership and allocation evidence | Oracle-native lineage or Kuberic history |
 
 The Oracle Free clone result is the concrete non-substitution proof: an
