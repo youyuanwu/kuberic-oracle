@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, TcpListener};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,7 +42,8 @@ const RUNTIME_RESOURCE_UID: &str = "oracle-live-runtime";
 const RUNTIME_POD_UID: &str = "oracle-live-runtime-pod";
 const RUNTIME_PVC_UID: &str = "oracle-live-runtime-pvc";
 const RUNTIME_TOKEN: &str = "******";
-const RUNTIME_DEADLINE: Duration = Duration::from_secs(30);
+const RUNTIME_DEADLINE: Duration = Duration::from_secs(60);
+const RUNTIME_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 pub struct WorkerObservationSource {
@@ -70,6 +72,24 @@ impl WorkerObservationSource {
     }
 
     pub async fn exercise_runtime_host(&self, root: &Path) -> Result<(), PocFailure> {
+        let mut last_failure = None;
+        for attempt in 1..=RUNTIME_ATTEMPTS {
+            let attempt_root = root.join(format!("attempt-{attempt}"));
+            std::fs::DirBuilder::new()
+                .recursive(false)
+                .mode(0o700)
+                .create(&attempt_root)
+                .map_err(|_| runtime_failure("live runtime attempt root could not be created"))?;
+            match self.exercise_runtime_host_once(&attempt_root).await {
+                Ok(()) => return Ok(()),
+                Err(error) => last_failure = Some(error),
+            }
+        }
+        Err(last_failure
+            .unwrap_or_else(|| runtime_failure("live runtime attempts did not execute")))
+    }
+
+    async fn exercise_runtime_host_once(&self, root: &Path) -> Result<(), PocFailure> {
         let control_address = free_address()?;
         let replication_address = free_address()?;
         let replication_endpoint = format!("http://{replication_address}");
@@ -144,8 +164,22 @@ impl WorkerObservationSource {
             )
             .map_err(|_| runtime_failure("live runtime initialization evidence was invalid"))?;
             Ok::<_, PocFailure>(client)
-        }
-        .await;
+        };
+        tokio::pin!(initialized);
+        let initialized = tokio::select! {
+            result = &mut initialized => result,
+            started = &mut startup => {
+                self.wait_for_idle().await;
+                return match started {
+                    Ok(Ok(Some(mut running))) => {
+                        running.shutdown();
+                        let _ = tokio::time::timeout(RUNTIME_DEADLINE, running.wait()).await;
+                        Err(runtime_failure("live runtime became ready before initialization"))
+                    }
+                    _ => Err(runtime_failure("live runtime startup ended before initialization")),
+                };
+            }
+        };
         let mut client = match initialized {
             Ok(client) => client,
             Err(error) => {
