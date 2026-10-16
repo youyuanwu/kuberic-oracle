@@ -158,7 +158,9 @@ cargo test --locked --workspace --all-features
 
 Repository Cargo configuration sets
 `KUBERIC_ORACLE_ACCEPT_FREE_TERMS=YES`, so default Cargo tests require Linux
-x86-64, Docker, `strace`, and sufficient image storage. Run
+x86-64, Docker, `strace`, and sufficient image storage. All-feature builds
+also require `protoc` (`protobuf-compiler`) for the pinned Kuberic runtime
+schema build. Run
 `just check-server-free` when only the non-container contracts should execute.
 
 Run only the live proof:
