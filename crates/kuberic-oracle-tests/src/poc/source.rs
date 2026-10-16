@@ -16,22 +16,19 @@ use kuberic_oracle::{
     DatabaseId, DatabaseIncarnationIdentity, DecimalScn, NativeName, ObservationTarget,
     OracleObservation,
 };
-use kuberic_runtime::control::{
-    normalize_public_v1_agent_status_report, normalize_uninitialized_agent_status_report, proto,
-    public_v1_operation_command_to_proto,
-};
 use kuberic_runtime::protocol::command::{ProtocolCommand, PublicV1OperationCommand};
 use kuberic_runtime::protocol::public_operations::{
     PublicConfiguration, PublicOperationClass, PublicOperationIntent, PublicOperationProgram,
     PublicV1Identity,
 };
 use kuberic_runtime::protocol::types::{
-    ConfigurationDescriptor, ConfigurationMember, Epoch, OperationId, PodUid, ProcessSessionId,
-    PvcUid, ReplicaId, ReplicaIdentity, ReplicaInstanceId, ReplicaRole, ResourceUid,
-    derive_agent_generation, derive_initialization_id,
+    ConfigurationDescriptor, ConfigurationMember, EffectivePolicy, Epoch, OperationId, PodUid,
+    ProcessSessionId, PvcUid, ReplicaId, ReplicaIdentity, ReplicaInstanceId, ReplicaRole,
+    ResourceUid, derive_agent_generation, derive_initialization_id,
 };
+use kuberic_runtime::testing::sqlite_store::SqliteStore;
+use kuberic_runtime::testing::state::{SCHEMA_VERSION, StorageIdentity};
 use tokio::sync::Semaphore;
-use tonic::{Request, transport::Channel};
 
 use super::{
     Cancellation, PocCategory, PocFailure, WorkerRequest, protocol::ObservationRequest, run_worker,
@@ -148,54 +145,34 @@ impl WorkerObservationSource {
         let (application, host) =
             prepare_runtime_host(&config, source, Arc::new(SystemObservationClock))
                 .map_err(|_| runtime_failure("live runtime host preparation failed"))?;
+        let identity = runtime_identity();
+        let initialization_id = derive_initialization_id(
+            &ResourceUid::new(RUNTIME_RESOURCE_UID),
+            ReplicaId::new(1),
+            &PodUid::new(RUNTIME_POD_UID),
+            &PvcUid::new(RUNTIME_PVC_UID),
+        );
+        drop(
+            SqliteStore::create_public_v1_with_application_paths(
+                SqliteStore::metadata_database_path(config.data_root()),
+                PublicV1Identity::new(1),
+                StorageIdentity {
+                    schema_version: SCHEMA_VERSION,
+                    resource_uid: ResourceUid::new(RUNTIME_RESOURCE_UID),
+                    pod_uid: PodUid::new(RUNTIME_POD_UID),
+                    pvc_uid: PvcUid::new(RUNTIME_PVC_UID),
+                    initialization_id,
+                    local_identity: identity,
+                    effective_policy: EffectivePolicy::fixed(1, 30).ok_or_else(|| {
+                        runtime_failure("live runtime effective policy is invalid")
+                    })?,
+                },
+                config.application_storage_paths(),
+            )
+            .map_err(|_| runtime_failure("live runtime metadata initialization failed"))?,
+        );
         let (startup_shutdown, receiver) = tokio::sync::watch::channel(false);
         let mut startup = tokio::spawn(host.start_with_shutdown(receiver));
-        let initialized = async {
-            let (mut client, status) = wait_for_status(control_address).await?;
-            let initialization = client
-                .execute(initialization_request(status.process_session_id))
-                .await
-                .map_err(|_| runtime_failure("live runtime initialization command failed"))?
-                .into_inner();
-            normalize_uninitialized_agent_status_report(
-                initialization.observation.ok_or_else(|| {
-                    runtime_failure("live runtime initialization lacked evidence")
-                })?,
-            )
-            .map_err(|_| runtime_failure("live runtime initialization evidence was invalid"))?;
-            Ok::<_, PocFailure>(client)
-        };
-        tokio::pin!(initialized);
-        let initialized = tokio::select! {
-            result = &mut initialized => result,
-            started = &mut startup => {
-                self.wait_for_idle().await;
-                return match started {
-                    Ok(Ok(Some(mut running))) => {
-                        running.shutdown();
-                        let _ = tokio::time::timeout(RUNTIME_DEADLINE, running.wait()).await;
-                        Err(runtime_failure("live runtime became ready before initialization"))
-                    }
-                    _ => Err(runtime_failure("live runtime startup ended before initialization")),
-                };
-            }
-        };
-        let mut client = match initialized {
-            Ok(client) => client,
-            Err(error) => {
-                if cancel_startup(&startup_shutdown, &mut startup)
-                    .await
-                    .is_err()
-                {
-                    self.wait_for_idle().await;
-                    return Err(runtime_failure(
-                        "live runtime initialization and cleanup failed",
-                    ));
-                }
-                self.wait_for_idle().await;
-                return Err(error);
-            }
-        };
         let mut running = match tokio::time::timeout(RUNTIME_DEADLINE, &mut startup).await {
             Ok(Ok(Ok(Some(running)))) => running,
             Ok(Ok(Ok(None))) | Ok(Ok(Err(_))) | Ok(Err(_)) => {
@@ -208,7 +185,8 @@ impl WorkerObservationSource {
                 return Err(runtime_failure("live runtime startup failed"));
             }
         };
-        let result = exercise_supported_lifecycle(&mut client, control_address, &application).await;
+        let handle = running.handle();
+        let result = exercise_supported_lifecycle(&handle, &application).await;
         let close = if result.is_ok() {
             let session = running.handle().process_session_id();
             running
@@ -304,66 +282,60 @@ async fn cancel_startup(
 }
 
 async fn exercise_supported_lifecycle(
-    client: &mut proto::agent_control_client::AgentControlClient<Channel>,
-    control_address: SocketAddr,
+    handle: &kuberic_runtime::host::ReplicaHandle,
     application: &Arc<kuberic_oracle::runtime_host::OracleRuntimeHostApplication>,
 ) -> Result<(), PocFailure> {
-    let (_, report) = wait_for_status(control_address).await?;
-    let current = normalize_public_v1_agent_status_report(report)
-        .map_err(|_| runtime_failure("live runtime initial report was invalid"))?;
-    let session = current.process_session_id;
-    execute_program(
-        client,
-        &session,
-        1,
-        "live-open",
-        PublicOperationProgram::Open {
-            replica: runtime_identity(),
-            existing: false,
-        },
-    )
-    .await?;
-    execute_program(
-        client,
-        &session,
-        2,
-        "live-primary",
-        PublicOperationProgram::Role {
-            epoch: Epoch::new(0, 1),
-            role: ReplicaRole::Primary,
-        },
-    )
-    .await?;
-    execute_program(
-        client,
-        &session,
-        3,
-        "live-epoch",
-        PublicOperationProgram::Epoch {
-            epoch: Epoch::new(0, 1),
-        },
-    )
-    .await?;
-    execute_program(
-        client,
-        &session,
-        4,
-        "live-configuration",
-        PublicOperationProgram::Configuration(PublicConfiguration {
-            current: singleton_configuration(),
-            previous: None,
-            replicas: Vec::new(),
-        }),
-    )
-    .await?;
-    let progress = execute_program(
-        client,
-        &session,
-        5,
-        "live-progress",
-        PublicOperationProgram::Progress { capability: false },
-    )
-    .await?;
+    let session = handle.process_session_id();
+    for (revision, operation_id, program) in [
+        (
+            1,
+            "live-open",
+            PublicOperationProgram::Open {
+                replica: runtime_identity(),
+                existing: false,
+            },
+        ),
+        (
+            2,
+            "live-primary",
+            PublicOperationProgram::Role {
+                epoch: Epoch::new(0, 1),
+                role: ReplicaRole::Primary,
+            },
+        ),
+        (
+            3,
+            "live-epoch",
+            PublicOperationProgram::Epoch {
+                epoch: Epoch::new(0, 1),
+            },
+        ),
+        (
+            4,
+            "live-configuration",
+            PublicOperationProgram::Configuration(PublicConfiguration {
+                current: singleton_configuration(),
+                previous: None,
+                replicas: Vec::new(),
+            }),
+        ),
+        (
+            5,
+            "live-progress",
+            PublicOperationProgram::Progress { capability: false },
+        ),
+    ] {
+        handle
+            .execute_public_v1_command(ProtocolCommand::PublicV1Operation(Box::new(
+                operation_command(session.clone(), revision, operation_id, program),
+            )))
+            .await
+            .map_err(|_| runtime_failure("live runtime operation failed"))?;
+    }
+    let progress = handle
+        .public_v1_report()
+        .await
+        .map_err(|_| runtime_failure("live runtime report failed"))?;
     if progress.progress.first != 0
         || progress.progress.last != 0
         || progress.role != ReplicaRole::Primary
@@ -375,122 +347,6 @@ async fn exercise_supported_lifecycle(
         ));
     }
     Ok(())
-}
-
-async fn execute_program(
-    client: &mut proto::agent_control_client::AgentControlClient<Channel>,
-    session: &ProcessSessionId,
-    revision: u64,
-    operation_id: &str,
-    program: PublicOperationProgram,
-) -> Result<kuberic_runtime::protocol::public_operations::PublicV1AgentReport, PocFailure> {
-    let response = client
-        .execute(operation_request(
-            session.clone(),
-            revision,
-            operation_id,
-            program,
-        ))
-        .await
-        .map_err(|_| runtime_failure("live runtime operation failed"))?
-        .into_inner();
-    normalize_public_v1_agent_status_report(
-        response
-            .observation
-            .ok_or_else(|| runtime_failure("live runtime operation lacked evidence"))?,
-    )
-    .map_err(|_| runtime_failure("live runtime operation evidence was invalid"))
-}
-
-async fn wait_for_status(
-    control_address: SocketAddr,
-) -> Result<
-    (
-        proto::agent_control_client::AgentControlClient<Channel>,
-        proto::AgentStatusReport,
-    ),
-    PocFailure,
-> {
-    let deadline = tokio::time::Instant::now() + RUNTIME_DEADLINE;
-    loop {
-        if let Ok(mut client) = proto::agent_control_client::AgentControlClient::connect(format!(
-            "http://{control_address}"
-        ))
-        .await
-            && let Ok(report) = client
-                .get_status(authorized(proto::GetAgentStatusRequest {
-                    protocol_version: kuberic_runtime::protocol::PROTOCOL_VERSION,
-                    resource_uid: RUNTIME_RESOURCE_UID.to_owned(),
-                    replica_id: 1,
-                    expected_instance_id: RUNTIME_POD_UID.to_owned(),
-                }))
-                .await
-        {
-            return Ok((client, report.into_inner()));
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(runtime_failure(
-                "live runtime public endpoint did not become ready",
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-fn initialization_request(process_session_id: String) -> Request<proto::ExecuteCommandRequest> {
-    let resource_uid = ResourceUid::new(RUNTIME_RESOURCE_UID);
-    let replica_id = ReplicaId::new(1);
-    let pod_uid = PodUid::new(RUNTIME_POD_UID);
-    let pvc_uid = PvcUid::new(RUNTIME_PVC_UID);
-    let initialization = derive_initialization_id(&resource_uid, replica_id, &pod_uid, &pvc_uid);
-    let identity = runtime_identity();
-    authorized(proto::ExecuteCommandRequest {
-        protocol_version: kuberic_runtime::protocol::PROTOCOL_VERSION,
-        resource_uid: RUNTIME_RESOURCE_UID.to_owned(),
-        target: Some(identity.clone().into()),
-        expected_process_session_id: process_session_id,
-        command: Some(
-            proto::execute_command_request::Command::InitializeAgentStore(
-                proto::InitializeAgentStoreCommand {
-                    initialization_id: initialization.to_string(),
-                    resource_uid: RUNTIME_RESOURCE_UID.to_owned(),
-                    local_replica_id: 1,
-                    expected_instance_id: RUNTIME_POD_UID.to_owned(),
-                    expected_pod_uid: RUNTIME_POD_UID.to_owned(),
-                    expected_pvc_uid: RUNTIME_PVC_UID.to_owned(),
-                    assigned_agent_generation: identity.agent_generation.to_string(),
-                    effective_policy: Some(proto::EffectivePolicy {
-                        replica_set_size: 1,
-                        write_quorum: 1,
-                        read_quorum: 1,
-                        failover_delay_seconds: 30,
-                    }),
-                    bootstrap_configuration: Some(singleton_configuration().into()),
-                    provisioning: None,
-                },
-            ),
-        ),
-    })
-}
-
-fn operation_request(
-    session: ProcessSessionId,
-    revision: u64,
-    operation_id: &str,
-    program: PublicOperationProgram,
-) -> Request<proto::ExecuteCommandRequest> {
-    let identity = runtime_identity();
-    let command = operation_command(session.clone(), revision, operation_id, program);
-    authorized(proto::ExecuteCommandRequest {
-        protocol_version: kuberic_runtime::protocol::PROTOCOL_VERSION,
-        resource_uid: RUNTIME_RESOURCE_UID.to_owned(),
-        target: Some(identity.into()),
-        expected_process_session_id: session.to_string(),
-        command: Some(proto::execute_command_request::Command::PublicV1Operation(
-            public_v1_operation_command_to_proto(&command)
-                .expect("live runtime command is canonical"),
-        )),
-    })
 }
 
 fn operation_command(
@@ -544,15 +400,6 @@ fn runtime_identity() -> ReplicaIdentity {
         instance_id: ReplicaInstanceId::new(RUNTIME_POD_UID),
         agent_generation: derive_agent_generation(&initialization),
     }
-}
-
-fn authorized<T>(message: T) -> Request<T> {
-    let mut request = Request::new(message);
-    request.metadata_mut().insert(
-        "authorization",
-        RUNTIME_TOKEN.parse().expect("static token"),
-    );
-    request
 }
 
 fn free_address() -> Result<SocketAddr, PocFailure> {
