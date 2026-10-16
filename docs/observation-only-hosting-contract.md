@@ -135,7 +135,28 @@ peer communication can be admitted.
 
 ## Production and test boundary
 
-Production code now contains the feature-gated adapter contract but still has:
+Production code now contains the feature-gated adapter and runtime-host
+library. The runtime layer provides:
+
+- validated resource, replica, Pod, PVC, root, endpoint, token, deadline, and
+  transport configuration;
+- a versioned durable application binding for the exact Oracle support profile,
+  immutable image, DBID, `DB_UNIQUE_NAME`, incarnation, logical replica, and
+  canonical application root;
+- Kuberic named application-path binding and exact local endpoint resolution;
+- binding initialization for `OpenMode::New` and exact validation for
+  `OpenMode::Existing`;
+- bounded `ReplicaHost` startup cancellation, shutdown, wait, application
+  close, and abort containment; and
+- no-follow, owner-only, atomic application-binding persistence.
+
+The server-free proof initializes a real agent, executes Open, Primary, epoch,
+singleton configuration, progress, and Close, restarts from the same metadata
+and application roots, observes a new process session, and rejects a command
+from the superseded session. It also rejects changed Oracle target/support
+binding and a moved application path.
+
+Production still has:
 
 - no Oracle driver;
 - no runtime executable;
@@ -145,9 +166,11 @@ Production code now contains the feature-gated adapter contract but still has:
 - no plaintext production mode.
 
 The existing `oracledb` dependency and plaintext connection remain in the test
-crate and are restricted to the fixture-owned loopback worker. A future
-production observation source requires a separately reviewed non-plaintext
-transport and deployment design.
+crate and are restricted to the fixture-owned loopback worker. The test-only
+worker source drives the same real host lifecycle inside the existing live
+fixture, waits for worker idleness, and stops the host before fixture cleanup.
+A future production observation source requires a separately reviewed
+non-plaintext transport and deployment design.
 
 ## Data Guard separation
 

@@ -7,8 +7,8 @@ safety boundary established by
 observes an already provisioned database, while test-only infrastructure may
 own isolated database containers.
 
-The current repository implements the server-free contracts plus a default
-test-only live proof:
+The current repository implements the production-safe contracts and runtime
+host library plus a default test-only live proof:
 
 - digest-pinned image-reference syntax validation;
 - explicit standalone and Data Guard deployment profiles;
@@ -25,6 +25,9 @@ test-only live proof:
   observation source, empty adapter-owned history, exact singleton
   configuration admission, and explicit rejection of secondary, catch-up,
   build, removal, data-loss, and authority-changing paths; and
+- validated runtime process configuration, durable Oracle target/support
+  binding, named application storage, bounded `ReplicaHost` startup/shutdown,
+  restart, and stale-process-session containment; and
 - a pure-Rust, process-isolated Oracle Free live test with exact image,
   least-privilege, row-count, restart, same-volume recreation, fresh-volume
   clone-ambiguity, failure, recovery, and cleanup checks.
@@ -33,8 +36,9 @@ Production code still does **not** connect to Oracle, read credentials, launch
 containers, publish Oracle-native progress as Kuberic progress, configure Data
 Guard, or perform Oracle role changes. The optional Kuberic adapter publishes
 only progress zero for its empty adapter-owned history and returns no Oracle
-client service address. The live driver and plaintext connection exist only in
-the tests crate; plaintext is not a supported production mode.
+client service address. Production exposes no runtime executable or concrete
+observation source. The live driver and plaintext connection exist only in the
+tests crate; plaintext is not a supported production mode.
 
 See the [support and safety design](docs/design.md) and
 [Kuberic progress analysis](docs/kuberic-progress.md). The
@@ -103,7 +107,7 @@ security patches. See the
 
 | Profile | Repository edition profile / artifact | Replicas | Replication | Current status |
 |---|---|---:|---|---|
-| `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + optional custom singleton Replicator + test-only live proof |
+| `standalone` | Oracle AI Database Free | 1 | None | Observe-only contract + runtime-host library + server-free/live lifecycle proof |
 | `standalone` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 1 | None | Contract implemented |
 | `data_guard_physical` | `EnterpriseDeveloper` / `Enterprise` with an approved Enterprise-capable artifact | 3 | Oracle Data Guard | Contract only |
 
@@ -121,7 +125,7 @@ accept license terms on behalf of an operator.
 
 - `crates/kuberic-oracle` contains production-safe configuration, raw-row
   parsing, snapshot contracts, observation admission, and the optional
-  injected-source Kuberic custom Replicator.
+  injected-source Kuberic custom Replicator and runtime-host library.
 - `crates/kuberic-oracle-tests` contains cross-crate tests, the pure-Rust PoC
   worker, and the explicitly authorized live container fixture.
 - `docs/design.md` defines deployment ownership, support boundaries, staged
@@ -185,8 +189,10 @@ accepts only a normalized absolute local Unix Docker socket, binds recovery to
 that endpoint, publishes the listener on host loopback only, verifies worker connection
 destinations, runs positive/authentication/authorization cases serially,
 brackets the current whole-database incarnation, proves instance restart and
-same-volume container recreation separately, and removes only
-identity-matched owned resources.
+same-volume container recreation separately, drives a real Kuberic
+`ReplicaHost` through Open, Primary, singleton configuration, progress zero,
+and Close using the worker-backed source, waits for worker idleness, and
+removes only identity-matched owned resources.
 
 The pinned image seeds a fresh owned volume with the same DBID and current
 incarnation evidence. The live proof therefore records changed fixture

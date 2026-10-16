@@ -200,6 +200,14 @@ the adapter's actual empty Kuberic application-history domain. Oracle SCN,
 resetlogs, activation, and incarnation remain separate native evidence and are
 never converted to Kuberic progress, epoch, or history.
 
+The runtime-host proof exercises this contract through a real Public V1 agent.
+Its report carries Primary progress `[0, 0]`, no application service location,
+the exact process session, and Kuberic's Pod/PVC-backed storage incarnation.
+Restart from the same metadata and durable Oracle application binding produces
+a fresh process session; a command fenced to the old session is rejected.
+The live fixture repeats the supported lifecycle with the process-isolated
+loopback Oracle worker and stops the host before fixture cleanup.
+
 ## Future Data Guard admission
 
 The current Rust contract admits a preliminary physical Data Guard snapshot

@@ -3,7 +3,8 @@
 > **Status:** Research and design contract only. No Data Guard fixture,
 > production Oracle connection, Data Guard runtime adapter, role mutation, or
 > authority-changing operation is implemented. The separate Oracle Free
-> singleton custom Replicator remains observation-only and mutation-free.
+> singleton custom Replicator and runtime-host library remain observation-only
+> and mutation-free.
 >
 > **Oracle Free boundary:** Oracle AI Database Free remains one standalone,
 > observe-only, non-electable, mutation-free database. It is not a Data Guard
@@ -393,11 +394,12 @@ is unresolved:
     authorization/fencing principals; deny rules; credential handling; and
     authenticated encrypted channels with peer-name verification are not
     separately designed.
-12. **Runtime activation:** the Oracle Free custom singleton Replicator is
-    implemented server-free, but no production runtime executable,
-    non-plaintext Oracle observation source, deployment/storage evidence
-    binding, or upstream Oracle conformance subject exists. None may be
-    inferred from the adapter unit and repository contract tests.
+12. **Runtime activation:** the Oracle Free custom singleton Replicator,
+    durable runtime binding, real server-free host lifecycle, and test-only
+    worker-backed live lifecycle are implemented, but no production runtime
+    executable, non-plaintext Oracle observation source, external Oracle
+    deployment/storage evidence binding, or upstream Oracle conformance subject
+    exists. None may be inferred from the repository proofs.
 13. **Oracle Free:** any design would make Free electable, mutable,
     replicated, or Data Guard capable.
 

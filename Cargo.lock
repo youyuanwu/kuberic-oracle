@@ -850,7 +850,10 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "kuberic-runtime",
+ "libc",
  "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
 ]
@@ -859,7 +862,9 @@ dependencies = [
 name = "kuberic-oracle-tests"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "kuberic-oracle",
+ "kuberic-runtime",
  "libc",
  "oracledb",
  "pulldown-cmark",
@@ -867,6 +872,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
+ "tonic",
  "zeroize",
 ]
 

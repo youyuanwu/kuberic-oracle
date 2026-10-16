@@ -50,12 +50,38 @@ fn selected_public_v1_dependency_is_exact_and_optional() {
 fn production_adapter_has_no_oracle_driver_or_runtime_executable() {
     let production = read("crates/kuberic-oracle/Cargo.toml");
     let adapter = read("crates/kuberic-oracle/src/kuberic.rs");
+    let host = read("crates/kuberic-oracle/src/runtime_host/process.rs");
     let bin_directory = workspace_root().join("crates/kuberic-oracle/src/bin");
 
     assert!(!production.contains("oracledb"));
     assert!(!adapter.contains("oracledb"));
+    assert!(!host.contains("oracledb"));
     assert!(!adapter.contains("docker"));
+    assert!(!host.contains("docker"));
     assert!(!bin_directory.exists());
+}
+
+#[test]
+fn runtime_host_binds_identity_without_adding_a_live_oracle_source() {
+    let config = read("crates/kuberic-oracle/src/runtime_host/config.rs");
+    let binding = read("crates/kuberic-oracle/src/runtime_host/binding.rs");
+    let process = read("crates/kuberic-oracle/src/runtime_host/process.rs");
+
+    for required in [
+        "ReplicaProcessConfig",
+        "APPLICATION_STORAGE_NAME",
+        "RuntimeBindingStore",
+        "OpenMode::New",
+        "OpenMode::Existing",
+        "start_with_shutdown",
+        "with_application_storage_paths",
+    ] {
+        assert!(
+            config.contains(required) || binding.contains(required) || process.contains(required),
+            "{required}"
+        );
+    }
+    assert!(!process.contains("OracleObservationSource for"));
 }
 
 #[test]

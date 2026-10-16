@@ -169,6 +169,10 @@ fn custom_singleton_contract_is_bounded_and_has_no_oracle_replication_claims() {
         "no Oracle driver",
         "no runtime executable",
         "no plaintext production mode",
+        "versioned durable application binding",
+        "initializes a real agent",
+        "observes a new process session",
+        "waits for worker idleness",
         "does not make Oracle Free electable, replicated, or Data Guard capable",
     ] {
         assert!(contract.contains(required), "{required}");
@@ -191,7 +195,8 @@ fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
             "README.md",
             [
                 "standalone, observe-only, non-electable",
-                "optional custom singleton Replicator",
+                "optional Public V1 custom singleton Replicator",
+                "runtime-host library",
             ],
         ),
         (
@@ -199,6 +204,7 @@ fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
             [
                 "an optional exact-revision Kuberic dependency",
                 "progress zero as the adapter's empty Kuberic history",
+                "a real server-free initialization/lifecycle/restart proof",
             ],
         ),
         (
@@ -206,11 +212,12 @@ fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
             [
                 "Return zero for empty adapter-owned Kuberic history",
                 "Publish no Oracle client service address",
+                "a command fenced to the old session is rejected",
             ],
         ),
         (
             "docs/observation-only-hosting-contract.md",
-            ["mutation-free", "Data Guard-free"],
+            ["mutation-free", "Data Guard-free", "runtime-host library"],
         ),
     ];
     for (path, required) in per_document {
@@ -231,7 +238,7 @@ fn oracle_free_boundary_and_data_guard_blockers_remain_explicit() {
         "independent fencing",
         "identity separation",
         "native exact-completion proof",
-        "no production runtime executable, non-plaintext Oracle observation source, deployment/storage evidence binding, or upstream Oracle conformance subject exists",
+        "no production runtime executable, non-plaintext Oracle observation source, external Oracle deployment/storage evidence binding, or upstream Oracle conformance subject exists",
     ] {
         assert!(
             readiness.contains(required),
