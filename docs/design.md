@@ -562,6 +562,11 @@ Still deferred:
 
 ### Stage 4: Enterprise Data Guard research and fixture
 
+The proposed [replication and HA join design](replication-ha-design.md)
+details native build/join and a certified, history-bound LSN mapping. It is
+not an implemented capability or permission to bypass readiness gates; the
+current Free progress and mutation boundaries remain unchanged.
+
 - retain the exact development terms and image-distribution path as stop
   conditions until an authorized 23-or-later artifact is verified;
 - choose broker-managed or brokerless operation only after the documented
@@ -574,8 +579,9 @@ Still deferred:
   state, including `READ ONLY WITH APPLY`, for the selected CDB/PDB use;
 - use the selected Public V1 custom-Replicator API as the architectural base,
   while retaining all Oracle-native artifact, licensing, topology, principal,
-  fencing, and exact-completion gates rather than mapping SCN to Kuberic
-  progress; and
+  fencing, and exact-completion gates rather than treating raw SCN as Kuberic
+  progress; the proposed certified mapping requires its own native and
+  conformance proofs; and
 - enforce the [readiness stop conditions](data-guard-readiness.md#stop-conditions).
 
 ### Stage 5: authority-changing operations

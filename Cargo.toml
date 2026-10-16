@@ -19,7 +19,6 @@ kuberic-oracle = { path = "crates/kuberic-oracle" }
 kuberic-runtime = { git = "https://github.com/youyuanwu/kuberic.git", rev = "28b181bb1846d057cce5913513a46ed72de4c977", default-features = false, features = ["host"] }
 libc = "0.2"
 oracledb = "=26.0.0-beta.4"
-pulldown-cmark = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

@@ -16,6 +16,12 @@
 
 ## Claim labels
 
+The proposed [replication and HA join design](replication-ha-design.md)
+develops the custom Replicator, immutable standby build, role-specific LSN
+certificates, native quorum policy, and fenced transition state machines.
+Its decisions remain proposals subject to this contract's stop conditions;
+it neither implements these paths nor supplies stop-condition closure evidence.
+
 Every conclusion in this document uses one of these labels:
 
 - **Verified fact** — supported by repository code at the cited lines or by an
